@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 
-DEFAULT_ROOT = Path.home() / ".ws"
+DEFAULT_ROOT = Path.home() / ".handoff"
 REMOVED_DEFAULT_TOOLS = {"gemini"}
 
 
@@ -28,7 +28,7 @@ class EditorConfig:
 class AppConfig:
     root: Path = DEFAULT_ROOT
     editor: EditorConfig = field(default_factory=EditorConfig)
-    tools: dict[str, str] = field(default_factory=dict)
+    tools: dict[str, str] = field(default_factory=lambda: {"codex": "codex", "claude": "claude"})
     ai_command: str | None = None
     theme: str = "graphite-crimson"
 
@@ -53,7 +53,7 @@ def default_config_data(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
             "default": editor.default,
             "options": editor.options,
         },
-        "tools": {},
+        "tools": {"codex": "codex", "claude": "claude"},
         "ai_command": None,
         "theme": "graphite-crimson",
     }
@@ -82,7 +82,7 @@ def load_config(root: Path = DEFAULT_ROOT) -> AppConfig:
     )
     tools = {
         name: command
-        for name, command in dict(raw.get("tools") or {}).items()
+        for name, command in dict(raw.get("tools") or AppConfig().tools).items()
         if name.lower() not in REMOVED_DEFAULT_TOOLS
     }
     return AppConfig(

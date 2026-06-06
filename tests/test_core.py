@@ -6,9 +6,9 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-from handoff.config import ensure_config, load_config
+from handoff.config import AppConfig, ensure_config, load_config
 from handoff.cli import app
-from handoff.handoff import HandoffDraft, parse_combined_draft, parse_last_sections, render_combined_draft
+from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
 from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, run_command
 from handoff.session import parse_session_file, render_handoff
 from handoff.tui import merge_next_text, strip_handoff_frontmatter
@@ -22,7 +22,14 @@ from handoff.workspace import (
 )
 
 
-def test_config_creation(tmp_path: Path) -> None:
+def test_default_config_uses_in_code_defaults() -> None:
+    config = AppConfig()
+
+    assert config.editor.default == "nvim"
+    assert config.tools == {"codex": "codex", "claude": "claude"}
+
+
+def test_config_creation_uses_handoff_root(tmp_path: Path) -> None:
     config = ensure_config(tmp_path)
 
     assert config.root == tmp_path
@@ -42,7 +49,7 @@ def test_load_config_filters_removed_default_tools(tmp_path: Path) -> None:
     assert config.tools == {"claude": "claude"}
 
 
-def test_current_directory_workspace_uses_local_ws_metadata(tmp_path: Path) -> None:
+def test_current_directory_workspace_uses_local_handoff_metadata(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -51,10 +58,10 @@ def test_current_directory_workspace_uses_local_ws_metadata(tmp_path: Path) -> N
 
     assert workspace.external is True
     assert workspace.path == repo.resolve()
-    assert workspace.meta == (repo / ".ws").resolve()
-    assert (repo / ".ws" / "WORKSPACE.md").exists()
-    assert (repo / ".ws" / "LAST.md").exists()
-    assert (repo / ".ws" / "NEXT.md").exists()
+    assert workspace.meta == (repo / ".handoff").resolve()
+    assert (repo / ".handoff" / "WORKSPACE.md").exists()
+    assert (repo / ".handoff" / "LAST.md").exists()
+    assert (repo / ".handoff" / "NEXT.md").exists()
     assert workspace_type(workspace) == "regular"
 
 
@@ -67,9 +74,9 @@ def test_init_directory_command_creates_local_workspace(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert target.is_dir()
-    assert (target / ".ws" / "WORKSPACE.md").exists()
-    assert (target / ".ws" / "LAST.md").exists()
-    assert (target / ".ws" / "NEXT.md").exists()
+    assert (target / ".handoff" / "WORKSPACE.md").exists()
+    assert (target / ".handoff" / "LAST.md").exists()
+    assert (target / ".handoff" / "NEXT.md").exists()
 
 
 def test_workspace_type_infers_code_only_from_git_directory(tmp_path: Path) -> None:
@@ -91,7 +98,7 @@ def test_codex_tool_creates_agents_memory_file(tmp_path: Path) -> None:
     path = tmp_path / "AGENTS.md"
     assert path.exists()
     text = path.read_text(encoding="utf-8")
-    assert "Read `.ws/WORKSPACE.md`" in text
+    assert "Read `.handoff/WORKSPACE.md`" in text
     assert "Treat it as the live handoff ledger" in text
     assert "Before handing control back to the user after material work" in text
     assert "brief summary of important `git diff` details" in text
@@ -141,7 +148,7 @@ def test_render_and_parse_session(tmp_path: Path) -> None:
 
 def test_missing_executable_is_launch_error(tmp_path: Path) -> None:
     try:
-        run_command(["definitely-not-installed-ws-tool"], cwd=tmp_path)
+        run_command(["definitely-not-installed-handoff-tool"], cwd=tmp_path)
     except LaunchError as exc:
         assert "Could not find executable" in str(exc)
     else:
@@ -175,8 +182,8 @@ def test_parse_last_sections_drops_passive_completed_items() -> None:
     summary, done, open_issues = parse_last_sections(
         "### Summary\n\nUpdated handoff behavior.\n\n"
         "### Completed\n\n"
-        "- Read `.ws/WORKSPACE.md`.\n"
-        "- Re-read `.ws/NEXT.md`.\n"
+        "- Read `.handoff/WORKSPACE.md`.\n"
+        "- Re-read `.handoff/NEXT.md`.\n"
         "- Implemented completed-item filtering.\n"
         "- Ran pytest.\n\n"
         "### Open Issues\n\n- None"
@@ -188,6 +195,28 @@ def test_parse_last_sections_drops_passive_completed_items() -> None:
     assert "- Implemented completed-item filtering." in done
     assert "- Ran pytest." not in done
     assert open_issues == "- None"
+
+
+def test_legacy_draft_prefill_normalizes_diff_markers() -> None:
+    draft = parse_draft_or_files(
+        "# Current Session Summary\n\n"
+        "## Summary\n\n"
+        "+Implemented a modal prefill fix.\n\n"
+        "## Completed\n\n"
+        "-- Fixed strict draft parsing.\n"
+        "+- Added regression coverage.\n\n"
+        "## Open Issues\n\n"
+        "+- None\n\n"
+        "# Next\n\n"
+        "+- Verify handoff save from the TUI."
+    )
+
+    summary, done, open_issues = parse_last_sections(draft.last)
+
+    assert summary == "Implemented a modal prefill fix."
+    assert done == "- Fixed strict draft parsing.\n- Added regression coverage."
+    assert open_issues == "- None"
+    assert draft.next == "# Next\n\n- Verify handoff save from the TUI."
 
 
 def test_strip_handoff_frontmatter(tmp_path: Path) -> None:

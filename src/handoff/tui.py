@@ -8,18 +8,18 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
+from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Input, Label, Markdown, MarkdownViewer, TextArea
 
 from handoff.config import AppConfig
 from handoff.git import changed_files_from_status, git_status_short
 from handoff.launcher import LaunchError, codex_finalize_command, editor_command, run_command, tool_command
-from handoff.handoff import parse_combined_draft, parse_last_sections
-from handoff.session import now_local
+from handoff.handoff import parse_draft_or_files, parse_last_sections
+from handoff.session import now_local, render_session_log, session_filename, update_day_log
 from handoff.theme import ensure_themes_dir, register_all_themes
 from handoff.workspace import Workspace, ensure_tool_file, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
 
 
-HIDDEN_TREE_NAMES = {".git", ".ws", "__pycache__", ".pytest_cache", ".claude"}
+HIDDEN_TREE_NAMES = {".git", ".handoff", "__pycache__", ".pytest_cache", ".claude"}
 MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdown", ".mkdn"}
 
 
@@ -38,6 +38,13 @@ class WorkspaceDirectoryTree(DirectoryTree):
 
 
 class HandoffScreen(ModalScreen[dict[str, str] | None]):
+    FIELD_ORDER = [
+        ("page-summary", "handoff-summary", "Summary"),
+        ("page-done", "handoff-done", "Completed"),
+        ("page-open", "handoff-open", "Open issues"),
+        ("page-next", "handoff-next", "Next session"),
+    ]
+
     CSS = """
     HandoffScreen {
         align: center middle;
@@ -55,15 +62,30 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
         height: auto;
         text-style: bold;
         color: $accent;
+        padding: 0;
+    }
+
+    #handoff-page-status {
+        height: auto;
+        color: $text-muted;
         padding: 0 0 1 0;
         border-bottom: solid $panel-darken-2;
     }
 
     .field-label {
         height: auto;
-        padding: 1 0 0 0;
+        padding: 1 0;
         text-style: bold;
         color: $text-muted;
+    }
+
+    #handoff-pages {
+        height: 1fr;
+        margin-top: 1;
+    }
+
+    .handoff-page {
+        height: 1fr;
     }
 
     .handoff-field {
@@ -93,8 +115,8 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=False),
-        Binding("ctrl+down", "focus_next_field", "Next Field", show=False),
-        Binding("ctrl+up", "focus_previous_field", "Previous Field", show=False),
+        Binding("ctrl+right", "next_field", "Next Field", show=False, priority=True),
+        Binding("ctrl+left", "previous_field", "Previous Field", show=False, priority=True),
         Binding("ctrl+s", "save", "Save", show=False),
     ]
 
@@ -106,60 +128,68 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
         self.open_items = open_items
         self.next_template = next_template
         self.evidence = evidence
+        self.current_field_index = 0
 
     def compose(self) -> ComposeResult:
         with Vertical(id="handoff-dialog"):
-            yield Label(f"Session Handoff  ·  {self.workspace_name}", id="handoff-title")
-            yield Label("Summary", classes="field-label")
-            yield TextArea(
-                self.summary,
-                id="handoff-summary",
-                classes="handoff-field",
-                soft_wrap=True,
-                show_line_numbers=False,
-            )
-            yield Label("Completed", classes="field-label")
-            yield TextArea(
-                self.done,
-                id="handoff-done",
-                classes="handoff-field",
-                soft_wrap=True,
-                show_line_numbers=False,
-            )
-            yield Label("Open issues", classes="field-label")
-            yield TextArea(
-                self.open_items,
-                id="handoff-open",
-                classes="handoff-field",
-                soft_wrap=True,
-                show_line_numbers=False,
-            )
-            yield Label("Next session", classes="field-label")
-            yield TextArea(
-                self.next_template,
-                id="handoff-next",
-                classes="handoff-field",
-                soft_wrap=True,
-                show_line_numbers=False,
-            )
-            if self.evidence:
-                yield Label("Evidence", classes="field-label")
-                yield TextArea(
-                    self.evidence,
-                    id="handoff-evidence",
-                    classes="handoff-field",
-                    read_only=True,
-                    soft_wrap=True,
-                    show_line_numbers=False,
-                )
+            yield Label(f"Session Handoff - {self.workspace_name}", id="handoff-title")
+            yield Label("", id="handoff-page-status")
+            with ContentSwitcher(initial="page-summary", id="handoff-pages"):
+                with Vertical(id="page-summary", classes="handoff-page"):
+                    yield Label("Summary", classes="field-label")
+                    yield TextArea(
+                        self.summary,
+                        id="handoff-summary",
+                        classes="handoff-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                with Vertical(id="page-done", classes="handoff-page"):
+                    yield Label("Completed", classes="field-label")
+                    yield TextArea(
+                        self.done,
+                        id="handoff-done",
+                        classes="handoff-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                with Vertical(id="page-open", classes="handoff-page"):
+                    yield Label("Open issues", classes="field-label")
+                    yield TextArea(
+                        self.open_items,
+                        id="handoff-open",
+                        classes="handoff-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                with Vertical(id="page-next", classes="handoff-page"):
+                    yield Label("Next session", classes="field-label")
+                    yield TextArea(
+                        self.next_template,
+                        id="handoff-next",
+                        classes="handoff-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                if self.evidence:
+                    with Vertical(id="page-evidence", classes="handoff-page"):
+                        yield Label("Evidence", classes="field-label")
+                        yield TextArea(
+                            self.evidence,
+                            id="handoff-evidence",
+                            classes="handoff-field",
+                            read_only=True,
+                            soft_wrap=True,
+                            show_line_numbers=False,
+                        )
             with Horizontal(id="handoff-footer"):
-                yield Label("Ctrl+Down/Up switch fields\nCtrl+S save\nEsc cancel", id="handoff-help")
+                yield Label("Ctrl+Left/Right switch fields\nCtrl+S save\nEsc cancel", id="handoff-help")
                 with Horizontal(id="handoff-buttons"):
                     yield Button("Cancel", id="cancel", classes="handoff-button")
                     yield Button("Save", id="save", variant="primary", classes="handoff-button")
 
     def on_mount(self) -> None:
-        self.query_one("#handoff-summary", TextArea).focus()
+        self.show_field(0)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save":
@@ -181,17 +211,90 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
             }
         )
 
-    def action_focus_next_field(self) -> None:
-        order = ["handoff-summary", "handoff-done", "handoff-open", "handoff-next"]
-        current = self.focused.id if self.focused else order[0]
-        index = order.index(current) if current in order else 0
-        self.query_one(f"#{order[min(index + 1, len(order) - 1)]}", TextArea).focus()
+    def show_field(self, index: int) -> None:
+        self.current_field_index = index % len(self.FIELD_ORDER)
+        page_id, field_id, label = self.FIELD_ORDER[self.current_field_index]
+        self.query_one("#handoff-pages", ContentSwitcher).current = page_id
+        self.query_one("#handoff-page-status", Label).update(f"{label} ({self.current_field_index + 1}/{len(self.FIELD_ORDER)})")
+        self.query_one(f"#{field_id}", TextArea).focus()
 
-    def action_focus_previous_field(self) -> None:
-        order = ["handoff-summary", "handoff-done", "handoff-open", "handoff-next"]
-        current = self.focused.id if self.focused else order[0]
-        index = order.index(current) if current in order else 0
-        self.query_one(f"#{order[max(index - 1, 0)]}", TextArea).focus()
+    def action_next_field(self) -> None:
+        self.show_field(self.current_field_index + 1)
+
+    def action_previous_field(self) -> None:
+        self.show_field(self.current_field_index - 1)
+
+
+class NewFileScreen(ModalScreen[str | None]):
+    CSS = """
+    NewFileScreen {
+        align: center middle;
+    }
+
+    #new-file-dialog {
+        width: 60;
+        height: auto;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #new-file-title {
+        height: auto;
+        text-style: bold;
+        color: $accent;
+        padding: 0 0 1 0;
+    }
+
+    #new-file-input {
+        margin-top: 1;
+    }
+
+    #new-file-buttons {
+        height: auto;
+        align-horizontal: right;
+        margin-top: 1;
+    }
+
+    .new-file-button {
+        width: 9;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__()
+        self.directory = directory
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="new-file-dialog"):
+            yield Label(f"New file in {self.directory.name}/", id="new-file-title")
+            yield Input(placeholder="filename.md", id="new-file-input")
+            with Horizontal(id="new-file-buttons"):
+                yield Button("Cancel", id="cancel", classes="new-file-button")
+                yield Button("Create", id="create", variant="primary", classes="new-file-button")
+
+    def on_mount(self) -> None:
+        self.query_one("#new-file-input", Input).focus()
+
+    def on_input_submitted(self) -> None:
+        self.action_create()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "create":
+            self.action_create()
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_create(self) -> None:
+        filename = self.query_one("#new-file-input", Input).value.strip()
+        self.dismiss(filename if filename else None)
 
 
 def strip_handoff_frontmatter(path: Path) -> None:
@@ -290,7 +393,7 @@ def merge_next_text(existing: str, incoming: str) -> str:
 
 
 class WorkspaceShell(App):
-    TITLE = "ws"
+    TITLE = "handoff"
 
     CSS = """
     #root {
@@ -413,6 +516,7 @@ class WorkspaceShell(App):
         Binding("home", "scroll_home", "Home", show=False),
         Binding("end", "scroll_end", "End", show=False),
         Binding("enter", "select_focused", "Select", show=False),
+        Binding("c", "new_file", "New File"),
     ]
 
     def __init__(self, config: AppConfig, workspace: Workspace) -> None:
@@ -537,6 +641,40 @@ class WorkspaceShell(App):
         tree = self.query_one("#file-tree", DirectoryTree)
         tree.reload()
         self.show_workspace_overview()
+
+    def _get_cursor_directory(self) -> Path:
+        tree = self.query_one("#file-tree", WorkspaceDirectoryTree)
+        node = tree.cursor_node
+        if node is not None and node.data is not None:
+            try:
+                node_path = Path(node.data.path)
+                return node_path if node_path.is_dir() else node_path.parent
+            except (AttributeError, TypeError):
+                pass
+        return self.workspace.path
+
+    def action_new_file(self) -> None:
+        if self.focus_area != "files":
+            return
+        target_dir = self._get_cursor_directory()
+
+        def on_result(filename: str | None) -> None:
+            if not filename:
+                return
+            new_path = target_dir / filename
+            if new_path.exists():
+                self.notify(f"{filename} already exists.", severity="warning")
+                return
+            try:
+                new_path.parent.mkdir(parents=True, exist_ok=True)
+                new_path.touch()
+            except OSError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.active_file = new_path
+            self.action_refresh()
+
+        self.push_screen(NewFileScreen(target_dir), on_result)
 
     def action_edit(self) -> None:
         if self.active_file is None:
@@ -746,7 +884,7 @@ class WorkspaceShell(App):
         summary, done, open_items = "", "- ", "- "
         next_text = strip_first_heading(next_template)
         if workspace.draft_file.exists():
-            draft = parse_combined_draft(workspace.draft_file.read_text(encoding="utf-8"))
+            draft = parse_draft_or_files(workspace.draft_file.read_text(encoding="utf-8"), next_template)
             summary, done, open_items = parse_last_sections(draft.last)
             if draft.next.strip():
                 next_text = merge_next_text(next_template, draft.next)
@@ -762,12 +900,44 @@ class WorkspaceShell(App):
         if not any(result[key].strip() for key in ("summary", "done", "open", "next")):
             self.notify("Handoff empty; nothing saved.")
             return
+        ended_at = now_local()
         last = render_last_markdown(result)
         next_text = render_next_markdown(result["next"])
+        session_name = session_filename(ended_at)
+        self.workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
+        session_path = self.workspace.sessions_dir / session_name
+        counter = 2
+        while session_path.exists():
+            session_name = session_filename(ended_at).removesuffix(".md") + f"-{counter}.md"
+            session_path = self.workspace.sessions_dir / session_name
+            counter += 1
+        session_path.write_text(
+            render_session_log(
+                workspace=self.workspace.name,
+                started_at=self.started_at,
+                ended_at=ended_at,
+                files_opened=self.files_opened,
+                tools_launched=self.tools_launched,
+                summary=result["summary"],
+                completed=result["done"],
+                open_issues=result["open"],
+                evidence=result.get("evidence", ""),
+            ),
+            encoding="utf-8",
+        )
+        update_day_log(
+            path=self.workspace.day_file(ended_at.date()),
+            workspace=self.workspace.name,
+            ended_at=ended_at,
+            session_file=session_name,
+            summary=result["summary"],
+            completed=result["done"],
+            open_issues=result["open"],
+        )
         self.workspace.last_file.write_text(last.rstrip() + "\n", encoding="utf-8")
         if next_text.strip():
             self.workspace.next_file.write_text(next_text.rstrip() + "\n", encoding="utf-8")
         if self.workspace.draft_file.exists():
             self.workspace.draft_file.unlink()
-        self.notify("Saved LAST.md and NEXT.md")
+        self.notify("Saved handoff, session log, and day log")
         self.show_workspace_overview()
