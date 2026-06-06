@@ -24,3 +24,27 @@ def parse_combined_draft(text: str) -> HandoffDraft:
     last, next_text = rest.split(NEXT_MARKER, 1)
     return HandoffDraft(last=last.strip(), next=next_text.strip())
 
+
+def parse_last_sections(text: str) -> tuple[str, str, str]:
+    """Extract (summary, done, open_issues) from a structured LAST.md draft section."""
+    lines_by_section: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            current = line[4:].strip().lower()
+            lines_by_section[current] = []
+        elif current is not None:
+            lines_by_section[current].append(line)
+    summary = done = open_issues = ""
+    for key, lines in lines_by_section.items():
+        content = "\n".join(lines).strip()
+        if "summary" in key:
+            summary = content
+        elif "completed" in key or "done" in key:
+            done = content
+        elif "open" in key or "issue" in key:
+            open_issues = content
+    if not any([summary, done, open_issues]):
+        summary = text.strip()
+    return summary, done or "- ", open_issues or "- "
+

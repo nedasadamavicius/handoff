@@ -34,6 +34,10 @@ class Workspace:
     def last_file(self) -> Path:
         return self.meta / "LAST.md"
 
+    @property
+    def draft_file(self) -> Path:
+        return self.meta / "DRAFT.md"
+
     def last_handoff(self) -> SessionFile | None:
         return read_handoff(self.last_file)
 
@@ -109,6 +113,54 @@ def infer_workspace_type(workspace: Workspace) -> str:
     return "code" if (workspace.path / ".git").is_dir() else "regular"
 
 
+
+
+TOOL_MEMORY_FILES: dict[str, str] = {
+    "claude": "CLAUDE.md",
+    "gemini": "GEMINI.md",
+}
+
+_TOOL_MEMORY_TEMPLATE = """\
+Read `.ws/WORKSPACE.md` to understand this workspace — its goals, context, and constraints.
+
+Before ending any session, write a handoff summary to `.ws/DRAFT.md` in this exact format:
+
+## LAST.md
+
+### Summary
+
+One or two sentences describing what was accomplished.
+
+### Completed
+
+- List of completed items.
+
+### Open Issues
+
+- Unresolved questions or blockers (use "- None" if there are none).
+
+## NEXT.md
+
+- Next action items for the following session.
+"""
+
+
+def _memory_filename(tool_name: str, command: str) -> str | None:
+    combined = (tool_name + " " + command).lower()
+    for key, filename in TOOL_MEMORY_FILES.items():
+        if key in combined:
+            return filename
+    return None
+
+
+def ensure_tool_files(workspace: Workspace, tools: dict[str, str]) -> None:
+    for name, command in tools.items():
+        filename = _memory_filename(name, command)
+        if filename is None:
+            continue
+        path = workspace.path / filename
+        if not path.exists():
+            path.write_text(_TOOL_MEMORY_TEMPLATE, encoding="utf-8")
 
 
 def workspace_files(workspace: Workspace) -> list[Path]:
