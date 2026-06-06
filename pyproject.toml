@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "handoff-ws"
+version = "0.1.0"
+description = "Local-first terminal workspace shell with Markdown handoffs."
+authors = ["Neds <neds@example.com>"]
+readme = "README.md"
+packages = [{ include = "handoff", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+pyyaml = "^6.0.2"
+textual = "^6.3.0"
+typer = "^0.20.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.1"
+
+[tool.poetry.scripts]
+ws = "handoff.cli:app"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
