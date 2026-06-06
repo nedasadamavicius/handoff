@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -38,6 +39,17 @@ class Workspace:
     def draft_file(self) -> Path:
         return self.meta / "DRAFT.md"
 
+    @property
+    def sessions_dir(self) -> Path:
+        return self.meta / "sessions"
+
+    @property
+    def days_dir(self) -> Path:
+        return self.meta / "days"
+
+    def day_file(self, value: date) -> Path:
+        return self.days_dir / f"{value.isoformat()}.md"
+
     def last_handoff(self) -> SessionFile | None:
         return read_handoff(self.last_file)
 
@@ -47,7 +59,7 @@ def current_directory_workspace(path: Path) -> Workspace:
     return Workspace(
         name=target.name or str(target),
         path=target,
-        metadata_path=target / ".ws",
+        metadata_path=target / ".handoff",
         external=True,
     )
 
@@ -89,7 +101,7 @@ def render_workspace_header(workspace_type: str) -> str:
     frontmatter = yaml.safe_dump({"workspace_type": workspace_type}, sort_keys=False).strip()
     return (
         f"---\n{frontmatter}\n---\n\n"
-        "<!-- ws uses the workspace_type front matter to choose handoff templates. "
+        "<!-- handoff uses the workspace_type front matter to choose handoff templates. "
         "Do not remove it unless you intentionally change the workspace type. -->\n\n"
     )
 
@@ -122,9 +134,9 @@ TOOL_MEMORY_FILES: dict[str, str] = {
 }
 
 _TOOL_MEMORY_TEMPLATE = """\
-Read `.ws/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
+Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
 
-During the session, keep `.ws/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
+During the session, keep `.handoff/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
 
 - what was done
 - files or areas affected
@@ -133,11 +145,13 @@ During the session, keep `.ws/DRAFT.md` current when you make material progress.
 
 The Completed section must describe shipped changes, decisions, fixes, or artifacts created. Do not list agent process steps such as reading, re-reading, inspecting, reviewing, searching, opening files, or running tests. Mention only the concrete outcome those steps produced.
 
-Before handing control back to the user after material work, make sure `.ws/DRAFT.md` reflects the latest completed work and evidence. Do this even if the user did not say the session is ending.
+Before handing control back to the user after material work, make sure `.handoff/DRAFT.md` reflects the latest completed work and evidence. Do this even if the user did not say the session is ending.
 
 Do not spend time expanding the NEXT.md section during ordinary progress updates. Fill or revise NEXT.md only when the agent session is ending or when the next action is already clear and durable.
 
-Before ending any session, make sure `.ws/DRAFT.md` uses this exact format:
+Before ending any session, make sure `.handoff/DRAFT.md` uses this exact format:
+
+Write normal human-readable Markdown. Do not write patch or diff notation in `.handoff/DRAFT.md`; bullets should start with `- `, never `+- ` or `-- `.
 
 ## LAST.md
 
@@ -182,7 +196,7 @@ def ensure_tool_file(workspace: Workspace, tool_name: str, command: str) -> None
 
 
 def workspace_files(workspace: Workspace) -> list[Path]:
-    ignored = {".git", ".ws", "__pycache__"}
+    ignored = {".git", ".handoff", "__pycache__"}
     files: list[Path] = []
     for path in workspace.path.rglob("*"):
         if any(part in ignored for part in path.parts):
