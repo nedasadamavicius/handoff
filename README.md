@@ -67,6 +67,51 @@ Workspace metadata lives in readable files inside the current directory:
 
 The Python implementation is a validation build. File formats and the `ws` entrypoint should stay stable so the tool can be rewritten later without migrating user data.
 
+## Themes
+
+`ws` ships with the `graphite-crimson` theme by default. You can switch to any built-in Textual theme or create your own.
+
+**Switch theme** — add a `theme` key to `~/.ws/config.yaml`:
+
+```yaml
+theme: textual-dark
+```
+
+**Create a custom theme** — drop a YAML file in `~/.ws/themes/`:
+
+```yaml
+# ~/.ws/themes/my-theme.yaml
+name: my-theme
+dark: true
+primary: "#DC143C"
+secondary: "#8B0000"
+accent: "#C0392B"
+warning: "#DC143C"
+success: "#8B0000"
+error: "#FF3333"
+background: "#0d0d0d"
+surface: "#171717"
+panel: "#222222"
+foreground: "#e8e8e8"
+```
+
+Then set `theme: my-theme` in your config. The file is discovered automatically on next launch — no restart of any service needed.
+
+A copy of `graphite-crimson.yaml` is written to `~/.ws/themes/` on first run as a starting point to copy and edit.
+
+Color roles:
+| Key | Used for |
+|---|---|
+| `primary` | Focus ring on the file pane, app title |
+| `accent` | Focus ring on the preview pane |
+| `success` | Last Session panel border and header |
+| `warning` | What's Next panel border and header |
+| `background` | App background |
+| `surface` | Widget backgrounds |
+| `panel` | Panel backgrounds, unfocused borders |
+| `foreground` | Primary text |
+| `secondary` / `error` | Secondary elements, error notifications |
+
 ## Known issues
 
 - PowerShell/Windows Terminal may show extra dark space around the TUI layout. Do not optimize around this yet; test layout primarily in the target terminal and revisit Windows terminal rendering later.
