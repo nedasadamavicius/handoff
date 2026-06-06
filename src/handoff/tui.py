@@ -570,7 +570,7 @@ class WorkspaceShell(App):
             self.notify(str(exc), severity="error")
             return
         self.tool_picker_open = False
-        self.action_refresh()
+        self.action_handoff()
 
     def action_move_up(self) -> None:
         if isinstance(self.focused, TextArea):
@@ -717,6 +717,7 @@ class WorkspaceShell(App):
 
     def save_handoff(self, result: dict[str, str] | None) -> None:
         if result is None:
+            self.action_refresh()
             return
         if not any(result[key].strip() for key in ("summary", "done", "open", "next")):
             self.notify("Handoff empty; nothing saved.")
