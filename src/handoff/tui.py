@@ -14,10 +14,11 @@ from handoff.config import AppConfig
 from handoff.git import changed_files_from_status, git_status_short
 from handoff.launcher import LaunchError, editor_command, run_command, tool_command
 from handoff.session import now_local
+from handoff.theme import ensure_themes_dir, register_all_themes
 from handoff.workspace import Workspace, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
 
 
-HIDDEN_TREE_NAMES = {".git", ".ws", "__pycache__", ".pytest_cache"}
+HIDDEN_TREE_NAMES = {".git", ".ws", "__pycache__", ".pytest_cache", ".claude"}
 MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdown", ".mkdn"}
 
 
@@ -42,11 +43,26 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
     }
 
     #handoff-dialog {
-        width: 86;
+        width: 88;
         height: 90%;
-        border: thick $accent;
+        border: solid $primary;
         background: $surface;
         padding: 1 2;
+    }
+
+    #handoff-title {
+        height: auto;
+        text-style: bold;
+        color: $accent;
+        padding: 0 0 1 0;
+        border-bottom: solid $panel-darken-2;
+    }
+
+    .field-label {
+        height: auto;
+        padding: 1 0 0 0;
+        text-style: bold;
+        color: $text-muted;
     }
 
     .handoff-field {
@@ -61,6 +77,7 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
 
     #handoff-footer {
         height: auto;
+        padding-top: 1;
     }
 
     #handoff-help {
@@ -69,7 +86,7 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
     }
 
     .handoff-button {
-        width: 10;
+        width: 9;
     }
     """
 
@@ -80,8 +97,9 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
         Binding("ctrl+s", "save", "Save", show=False),
     ]
 
-    def __init__(self, summary: str, done: str, open_items: str, next_template: str, evidence: str = "") -> None:
+    def __init__(self, workspace_name: str, summary: str, done: str, open_items: str, next_template: str, evidence: str = "") -> None:
         super().__init__()
+        self.workspace_name = workspace_name
         self.summary = summary
         self.done = done
         self.open_items = open_items
@@ -90,7 +108,8 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="handoff-dialog"):
-            yield Label("What did you do?")
+            yield Label(f"Session Handoff  ·  {self.workspace_name}", id="handoff-title")
+            yield Label("Summary", classes="field-label")
             yield TextArea(
                 self.summary,
                 id="handoff-summary",
@@ -98,7 +117,7 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
                 soft_wrap=True,
                 show_line_numbers=False,
             )
-            yield Label("Completed")
+            yield Label("Completed", classes="field-label")
             yield TextArea(
                 self.done,
                 id="handoff-done",
@@ -106,7 +125,7 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
                 soft_wrap=True,
                 show_line_numbers=False,
             )
-            yield Label("Open issues / questions")
+            yield Label("Open issues", classes="field-label")
             yield TextArea(
                 self.open_items,
                 id="handoff-open",
@@ -114,7 +133,7 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
                 soft_wrap=True,
                 show_line_numbers=False,
             )
-            yield Label("Next Session Plan")
+            yield Label("Next session", classes="field-label")
             yield TextArea(
                 self.next_template,
                 id="handoff-next",
@@ -123,7 +142,7 @@ class HandoffScreen(ModalScreen[dict[str, str] | None]):
                 show_line_numbers=False,
             )
             if self.evidence:
-                yield Label("Evidence")
+                yield Label("Evidence", classes="field-label")
                 yield TextArea(
                     self.evidence,
                     id="handoff-evidence",
@@ -198,6 +217,13 @@ def strip_first_heading(markdown: str) -> str:
     return markdown
 
 
+def strip_first_subheading(markdown: str) -> str:
+    lines = markdown.splitlines()
+    if lines and lines[0].startswith("## "):
+        return "\n".join(lines[1:]).lstrip()
+    return markdown
+
+
 def render_last_markdown(fields: dict[str, str]) -> str:
     parts = ["# Current Session Summary"]
     parts.append("## Summary\n\n" + (fields["summary"].strip() or "Not recorded."))
@@ -226,14 +252,20 @@ def normalize_list_text(text: str) -> str:
 
 
 class WorkspaceShell(App):
+    TITLE = "ws"
+
     CSS = """
     #root {
         height: 100%;
     }
 
     #browser {
-        width: 42;
-        border: solid $primary;
+        width: 40;
+        border: solid $panel;
+    }
+
+    #browser.focused-pane {
+        border: heavy $primary;
     }
 
     #right-pane {
@@ -252,22 +284,48 @@ class WorkspaceShell(App):
         height: 1fr;
     }
 
-    #file-tree {
+    #last-container {
+        width: 1fr;
         height: 1fr;
+        border: round $success;
+    }
+
+    #next-container {
+        width: 1fr;
+        height: 1fr;
+        border: round $warning;
+    }
+
+    #last-header {
+        height: auto;
+        padding: 0 1;
+        text-style: bold;
+        color: $success;
+        border-bottom: solid $success;
+    }
+
+    #next-header {
+        height: auto;
+        padding: 0 1;
+        text-style: bold;
+        color: $warning;
+        border-bottom: solid $warning;
     }
 
     #last-panel {
         width: 1fr;
         height: 1fr;
-        border: round $secondary;
-        padding: 1;
+        padding: 0 1;
     }
 
     #next-panel {
         width: 1fr;
         height: 1fr;
-        border: round $accent;
-        padding: 1;
+        padding: 0 1;
+    }
+
+    #file-tree {
+        height: 1fr;
     }
 
     #preview {
@@ -289,17 +347,8 @@ class WorkspaceShell(App):
         border: heavy $accent;
     }
 
-    #file-tree.focused-pane {
-        border: heavy $accent;
-    }
-
     DirectoryTree:focus {
         border: heavy $primary;
-    }
-
-    .pane-title {
-        text-style: bold;
-        padding: 0 1;
     }
     """
 
@@ -344,13 +393,16 @@ class WorkspaceShell(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="root"):
             with Vertical(id="browser"):
-                yield Label(f"Files - {self.workspace.path}", classes="pane-title")
                 yield WorkspaceDirectoryTree(str(self.workspace.path), id="file-tree")
             with Vertical(id="right-pane"):
                 with ContentSwitcher(id="right-switcher", initial="overview-view"):
                     with Horizontal(id="overview-view"):
-                        yield Markdown("", id="last-panel")
-                        yield Markdown("", id="next-panel")
+                        with Vertical(id="last-container"):
+                            yield Label("Last Session", id="last-header")
+                            yield Markdown("", id="last-panel")
+                        with Vertical(id="next-container"):
+                            yield Label("What's Next", id="next-header")
+                            yield Markdown("", id="next-panel")
                     with Vertical(id="preview-view"):
                         yield MarkdownViewer("", show_table_of_contents=False, id="preview")
                     with Vertical(id="text-preview-view"):
@@ -358,11 +410,14 @@ class WorkspaceShell(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        ensure_themes_dir(self.config.themes_dir)
+        register_all_themes(self, self.config)
         self.query_one("#file-tree", DirectoryTree).focus()
         if workspace_type(self.workspace) is None:
             ensure_workspace_files(self.workspace, workspace_kind=infer_workspace_type(self.workspace))
         else:
             ensure_workspace_files(self.workspace, workspace_kind=workspace_type(self.workspace) or "regular")
+        self.sub_title = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
         self.show_workspace_overview()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -384,17 +439,19 @@ class WorkspaceShell(App):
     def show_workspace_overview(self) -> None:
         workspace = self.workspace
         latest = workspace.last_handoff()
-        next_text = preview_file(workspace.next_file, limit=1500) if workspace.next_file.exists() else "No NEXT.md yet."
-        latest_text = latest.body[:2500] if latest else "No LAST.md yet."
+        next_text = (
+            preview_file(workspace.next_file, limit=1500)
+            if workspace.next_file.exists()
+            else "No next actions yet.\n\nPress **n** to add some."
+        )
+        latest_text = (
+            latest.body[:2500]
+            if latest
+            else "No session recorded yet.\n\nPress **h** after working to save your first handoff."
+        )
         self.query_one("#right-switcher", ContentSwitcher).current = "overview-view"
-        self.query_one("#last-panel", Markdown).update(
-            "# Last Session Summary\n\n"
-            f"{strip_first_heading(latest_text)}"
-        )
-        self.query_one("#next-panel", Markdown).update(
-            "# Here's what's next\n\n"
-            f"{strip_first_heading(next_text)}"
-        )
+        self.query_one("#last-panel", Markdown).update(strip_first_subheading(strip_first_heading(latest_text)))
+        self.query_one("#next-panel", Markdown).update(strip_first_heading(next_text))
         self.tool_picker_open = False
         self.preview_mode = False
         self.focus_area = "files"
@@ -548,10 +605,10 @@ class WorkspaceShell(App):
             self.update_focus_styles()
 
     def update_focus_styles(self) -> None:
-        tree = self.query_one("#file-tree", DirectoryTree)
+        browser = self.query_one("#browser", Vertical)
         markdown_preview = self.query_one("#preview", MarkdownViewer)
         text_preview = self.query_one("#text-preview", TextArea)
-        tree.set_class(self.focus_area == "files", "focused-pane")
+        browser.set_class(self.focus_area == "files", "focused-pane")
         markdown_preview.set_class(self.focus_area == "preview" and self.active_preview == "markdown", "focused-pane")
         text_preview.set_class(self.focus_area == "preview" and self.active_preview == "text", "focused-pane")
 
@@ -644,7 +701,10 @@ class WorkspaceShell(App):
             else ""
         )
         next_template = preview_file(workspace.next_file, limit=3000) if workspace.next_file.exists() else "# Next\n\n- "
-        self.push_screen(HandoffScreen("", "- ", "- ", strip_first_heading(next_template), evidence), self.save_handoff)
+        self.push_screen(
+            HandoffScreen(workspace.name, "", "- ", "- ", strip_first_heading(next_template), evidence),
+            self.save_handoff,
+        )
 
     def save_handoff(self, result: dict[str, str] | None) -> None:
         if result is None:
