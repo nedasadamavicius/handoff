@@ -30,10 +30,15 @@ class AppConfig:
     editor: EditorConfig = field(default_factory=EditorConfig)
     tools: dict[str, str] = field(default_factory=dict)
     ai_command: str | None = None
+    theme: str = "graphite-crimson"
 
     @property
     def workspaces_dir(self) -> Path:
         return self.root / "workspaces"
+
+    @property
+    def themes_dir(self) -> Path:
+        return self.root / "themes"
 
 
 def config_path(root: Path = DEFAULT_ROOT) -> Path:
@@ -50,6 +55,7 @@ def default_config_data(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
         },
         "tools": {},
         "ai_command": None,
+        "theme": "graphite-crimson",
     }
 
 
@@ -84,4 +90,5 @@ def load_config(root: Path = DEFAULT_ROOT) -> AppConfig:
         editor=editor,
         tools=tools,
         ai_command=raw.get("ai_command"),
+        theme=raw.get("theme") or "graphite-crimson",
     )
