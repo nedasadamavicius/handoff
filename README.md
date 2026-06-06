@@ -67,6 +67,56 @@ Workspace metadata lives in readable files inside the current directory:
 
 The Python implementation is a validation build. File formats and the `ws` entrypoint should stay stable so the tool can be rewritten later without migrating user data.
 
+## Agent handoff integration
+
+`ws` generates a tool memory file (`CLAUDE.md`, `GEMINI.md`, etc.) in the workspace root for each tool you have configured. The file instructs the agent to:
+
+1. Read `.ws/WORKSPACE.md` at session start to understand the workspace context.
+2. Write `.ws/DRAFT.md` before ending the session in a structured format.
+
+When you press `h` to open the handoff modal, `ws` checks for `.ws/DRAFT.md` and pre-populates the fields from the agent's draft. You review, edit if needed, and save. The draft is deleted after saving.
+
+The tool file is only created if it does not already exist, so your edits are never overwritten.
+
+**Supported tools** (matched by configured tool name or command):
+
+| Tool | File created |
+|---|---|
+| claude | `CLAUDE.md` |
+| gemini | `GEMINI.md` |
+
+To add a tool, configure it in `~/.ws/config.yaml`:
+
+```yaml
+tools:
+  claude: "claude"
+```
+
+Then run `ws` once — the file is created automatically on mount.
+
+**Draft format** (`.ws/DRAFT.md`):
+
+```markdown
+## LAST.md
+
+### Summary
+
+What was accomplished this session.
+
+### Completed
+
+- Item one.
+- Item two.
+
+### Open Issues
+
+- Anything unresolved.
+
+## NEXT.md
+
+- Next action items.
+```
+
 ## Themes
 
 `ws` ships with the `graphite-crimson` theme by default. You can switch to any built-in Textual theme or create your own.
