@@ -23,7 +23,7 @@ def main(ctx: typer.Context) -> None:
 @app.command()
 def init(
     directory: Path = typer.Argument(..., help="Directory workspace to create."),
-    root: Path = typer.Option(DEFAULT_ROOT, "--root", help="Workspace system root.", hidden=True),
+    root: Path = typer.Option(DEFAULT_ROOT, "--root", help="User config root.", hidden=True),
 ) -> None:
     """Create a directory workspace."""
     ensure_config(root)

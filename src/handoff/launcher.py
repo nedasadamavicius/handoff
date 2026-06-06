@@ -12,8 +12,9 @@ class LaunchError(RuntimeError):
 
 
 CODEX_FINALIZE_PROMPT = (
-    "Update .ws/DRAFT.md from the work completed in this Codex session. "
+    "Update .handoff/DRAFT.md from the work completed in this Codex session. "
     "Use the required handoff format from AGENTS.md. "
+    "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'. "
     "Complete LAST.md with what changed, affected files, relevant git diff details, and open issues. "
     "In Completed, include shipped changes, decisions, fixes, or artifacts created. "
     "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, or opening files; mention only the concrete outcome those steps produced. "

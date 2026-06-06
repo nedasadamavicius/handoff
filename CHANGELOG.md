@@ -3,7 +3,7 @@
 ## 2026-06-06
 
 - Added the first local workspace TUI prototype with a current-directory workflow.
-- Switched workspace metadata to `.ws/WORKSPACE.md`, `.ws/LAST.md`, and `.ws/NEXT.md`.
+- Switched workspace metadata to `.handoff/WORKSPACE.md`, `.handoff/LAST.md`, and `.handoff/NEXT.md`.
 - Added code-vs-regular workspace detection based on `.git/`.
 - Added editor/tool launching, including Claude/Codex-style command launchers.
 - Added a right-pane IA with last-session and next-session panels.

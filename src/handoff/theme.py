@@ -36,10 +36,10 @@ _THEME_STR_FIELDS = {
 
 def _theme_to_yaml(theme: Theme) -> str:
     data: dict = {"name": theme.name, "dark": theme.dark}
-    for f in _THEME_STR_FIELDS:
-        value = getattr(theme, f, None)
+    for field in _THEME_STR_FIELDS:
+        value = getattr(theme, field, None)
         if value is not None:
-            data[f] = value
+            data[field] = value
     return yaml.safe_dump(data, sort_keys=False)
 
 
@@ -52,9 +52,9 @@ def load_theme_file(path: Path) -> Theme | None:
     if not name:
         return None
     kwargs: dict = {"name": name, "dark": bool(raw.get("dark", True))}
-    for f in _THEME_STR_FIELDS:
-        if raw.get(f):
-            kwargs[f] = raw[f]
+    for field in _THEME_STR_FIELDS:
+        if raw.get(field):
+            kwargs[field] = raw[field]
     try:
         return Theme(**kwargs)
     except Exception:

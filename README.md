@@ -1,33 +1,35 @@
 # handoff
 
-Local-first terminal workspace shell for Markdown workspaces and short session handoffs.
+Handoff is for people who work in the terminal and regularly switch between projects or other ongoing work without wanting to lose context each time they stop. It was made for anyone comfortable in a terminal who needs a lightweight way to leave clear notes for their future self about what they were doing, what changed, and what to do next.
+
+The main use cases are study sessions and project work in GitHub repos, but the broader purpose is the same: make terminal-based work easier to resume after interruption. Instead of relying on memory, scattered notes, or long session history, Handoff keeps a small local handoff so you can return to work with context already waiting for you.
 
 ## Install for development
 
 ```bash
 poetry install
-poetry run ws init my-notes
+poetry run handoff init my-notes
 cd my-notes
-poetry run ws
+poetry run handoff
 ```
 
 You can also use an existing repository directly:
 
 ```bash
 cd path/to/existing-repo
-poetry run ws
+poetry run handoff
 ```
 
-On first run in a directory, `ws` creates local metadata in `.ws/` and opens that directory as the active workspace.
+On first run in a directory, `handoff` creates local metadata in `.handoff/` and opens that directory as the active workspace.
 
 ## Example use case: learning notes
 
-Use `ws` as a lightweight study handoff tool:
+Use `handoff` as a lightweight study handoff tool:
 
 ```bash
-poetry run ws init learning
+poetry run handoff init learning
 cd learning
-poetry run ws
+poetry run handoff
 ```
 
 During a study session, create or edit notes in the directory. When you are done, press `h` to open the handoff draft and fill in:
@@ -39,47 +41,52 @@ When you return later:
 
 ```bash
 cd learning
-poetry run ws
+poetry run handoff
 ```
 
 The overview shows what happened last session and what to do next, without needing a long session history.
 
-Configure external tools only after they are installed and available on `PATH`:
+The default tool launcher includes `codex` and `claude`. They must be installed and available on `PATH` before launching them from the TUI.
 
-```yaml
-tools:
-  codex: "codex"
-  helix: "hx ."
+User-level preferences live under `~/.handoff/`:
+
+```text
+~/.handoff/
+  config.yaml
+  themes/
+  workspaces/
 ```
+
+Workspace state lives under the active directory's `.handoff/` folder.
 
 ## Product shape
 
-`ws` opens a terminal UI for the current directory, previewing files, launching configured editors/tools, and saving handoff summaries.
+`handoff` opens a terminal UI for the current directory, previewing files, launching configured editors/tools, and saving handoff summaries.
 
 Workspace metadata lives in readable files inside the current directory:
 
 ```text
-.ws/
+.handoff/
   WORKSPACE.md
   LAST.md
   NEXT.md
 ```
 
-The Python implementation is a validation build. File formats and the `ws` entrypoint should stay stable so the tool can be rewritten later without migrating user data.
+The Python implementation is a validation build. File formats and the `handoff` entrypoint should stay stable so the tool can be rewritten later without migrating user data.
 
 ## Agent handoff integration
 
-When you open a configured agent tool from `ws`, such as `claude` or `codex`, `ws` generates that tool's memory file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, etc.) in the workspace root. These files are not created when the app itself opens. The file instructs the agent to:
+When you open a configured agent tool from `handoff`, such as `claude` or `codex`, `handoff` generates that tool's memory file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, etc.) in the workspace root. These files are not created when the app itself opens. The file instructs the agent to:
 
-1. Read `.ws/WORKSPACE.md` at session start to understand the workspace context.
-2. Treat `.ws/DRAFT.md` as a live handoff ledger and keep the LAST.md section current after material work, including affected files and relevant `git diff` details.
+1. Read `.handoff/WORKSPACE.md` at session start to understand the workspace context.
+2. Treat `.handoff/DRAFT.md` as a live handoff ledger and keep the LAST.md section current after material work, including affected files and relevant `git diff` details.
 3. Save NEXT.md updates for the end of the agent session unless the next action is already clear and durable.
 
-Agents are also instructed to refresh `.ws/DRAFT.md` before handing control back after material work, even if you did not say the session is ending.
+Agents are also instructed to refresh `.handoff/DRAFT.md` before handing control back after material work, even if you did not say the session is ending.
 
-When you press `h` to open the handoff modal, `ws` checks for `.ws/DRAFT.md` and pre-populates the fields from the agent's draft. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove it in the modal. You review, edit if needed, and save. The draft is deleted after saving.
+When you press `h` to open the handoff modal, `handoff` checks for `.handoff/DRAFT.md` and pre-populates the fields from the agent's draft. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove it in the modal. You review, edit if needed, and save. The draft is deleted after saving.
 
-After a Codex tool session exits, `ws` asks the most recent Codex session to refresh `.ws/DRAFT.md` before opening the handoff modal by running `codex exec resume --last` with a focused draft-finalization prompt.
+After a Codex tool session exits, `handoff` asks the most recent Codex session to refresh `.handoff/DRAFT.md` before opening the handoff modal by running `codex exec resume --last` with a focused draft-finalization prompt.
 
 The tool file is only created if it does not already exist, so your edits are never overwritten.
 
@@ -91,16 +98,9 @@ The tool file is only created if it does not already exist, so your edits are ne
 | codex | `AGENTS.md` |
 | gemini | `GEMINI.md` |
 
-To add a tool, configure it in `~/.ws/config.yaml`:
+The matching memory file is created only for the tool being opened, just before it starts.
 
-```yaml
-tools:
-  claude: "claude"
-```
-
-Then open that tool from `ws`. The matching memory file is created only for the tool being opened, just before it starts.
-
-**Draft format** (`.ws/DRAFT.md`):
+**Draft format** (`.handoff/DRAFT.md`):
 
 ```markdown
 ## LAST.md
@@ -125,18 +125,10 @@ What was accomplished this session.
 
 ## Themes
 
-`ws` ships with the `graphite-crimson` theme by default. You can switch to any built-in Textual theme or create your own.
-
-**Switch theme** — add a `theme` key to `~/.ws/config.yaml`:
+`handoff` ships with the `graphite-crimson` theme by default. Custom themes are global user preferences stored in `~/.handoff/themes/`.
 
 ```yaml
-theme: textual-dark
-```
-
-**Create a custom theme** — drop a YAML file in `~/.ws/themes/`:
-
-```yaml
-# ~/.ws/themes/my-theme.yaml
+# ~/.handoff/themes/my-theme.yaml
 name: my-theme
 dark: true
 primary: "#DC143C"
@@ -151,9 +143,7 @@ panel: "#222222"
 foreground: "#e8e8e8"
 ```
 
-Then set `theme: my-theme` in your config. The file is discovered automatically on next launch — no restart of any service needed.
-
-A copy of `graphite-crimson.yaml` is written to `~/.ws/themes/` on first run as a starting point to copy and edit.
+A copy of `graphite-crimson.yaml` is written to `~/.handoff/themes/` on first run as a starting point to copy and edit.
 
 Color roles:
 | Key | Used for |

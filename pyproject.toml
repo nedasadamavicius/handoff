@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "handoff-ws"
+name = "handoff"
 version = "0.1.0"
 description = "Local-first terminal workspace shell with Markdown handoffs."
 authors = ["Neds <neds@example.com>"]
@@ -16,9 +16,8 @@ typer = "^0.20.0"
 pytest = "^9.0.1"
 
 [tool.poetry.scripts]
-ws = "handoff.cli:app"
+handoff = "handoff.cli:app"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
-
