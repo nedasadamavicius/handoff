@@ -6,6 +6,9 @@ from dataclasses import dataclass
 LAST_MARKER = "## LAST.md"
 NEXT_MARKER = "## NEXT.md"
 
+LAST_HEADING = "# Current Session Summary"
+NEXT_HEADING = "# Next"
+
 
 @dataclass(frozen=True)
 class HandoffDraft:
@@ -18,11 +21,38 @@ def render_combined_draft(draft: HandoffDraft) -> str:
 
 
 def parse_combined_draft(text: str) -> HandoffDraft:
+    text = normalize_handoff_markdown(text)
     if LAST_MARKER not in text or NEXT_MARKER not in text:
         return HandoffDraft(last=text.strip(), next="")
     _, rest = text.split(LAST_MARKER, 1)
     last, next_text = rest.split(NEXT_MARKER, 1)
     return HandoffDraft(last=last.strip(), next=next_text.strip())
+
+
+def parse_draft_or_files(draft_text: str, next_text: str = "") -> HandoffDraft:
+    text = normalize_handoff_markdown(draft_text)
+    if LAST_MARKER in text or NEXT_MARKER in text:
+        return parse_combined_draft(text)
+    if NEXT_HEADING in text:
+        last, parsed_next = text.split(NEXT_HEADING, 1)
+        return HandoffDraft(last=last.strip(), next=f"{NEXT_HEADING}{parsed_next}".strip())
+    return HandoffDraft(last=text.strip(), next=normalize_handoff_markdown(next_text).strip())
+
+
+def normalize_handoff_markdown(text: str) -> str:
+    cleaned: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        leading = line[: len(line) - len(stripped)]
+        if stripped.startswith("+- "):
+            cleaned.append(f"{leading}- {stripped[3:]}")
+        elif stripped.startswith("-- "):
+            cleaned.append(f"{leading}- {stripped[3:]}")
+        elif stripped.startswith("+") and not stripped.startswith("++"):
+            cleaned.append(f"{leading}{stripped[1:]}")
+        else:
+            cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
 
 LOW_VALUE_COMPLETED_PREFIXES = (
@@ -65,11 +95,12 @@ def remove_low_value_completed_items(text: str) -> str:
 
 def parse_last_sections(text: str) -> tuple[str, str, str]:
     """Extract (summary, done, open_issues) from a structured LAST.md draft section."""
+    text = normalize_handoff_markdown(text)
     lines_by_section: dict[str, list[str]] = {}
     current: str | None = None
     for line in text.splitlines():
-        if line.startswith("### "):
-            current = line[4:].strip().lower()
+        if line.startswith(("## ", "### ")):
+            current = line.lstrip("#").strip().lower()
             lines_by_section[current] = []
         elif current is not None:
             lines_by_section[current].append(line)
