@@ -13,9 +13,10 @@ from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Labe
 from handoff.config import AppConfig
 from handoff.git import changed_files_from_status, git_status_short
 from handoff.launcher import LaunchError, editor_command, run_command, tool_command
+from handoff.handoff import parse_combined_draft, parse_last_sections
 from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
-from handoff.workspace import Workspace, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
+from handoff.workspace import Workspace, ensure_tool_files, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
 
 
 HIDDEN_TREE_NAMES = {".git", ".ws", "__pycache__", ".pytest_cache", ".claude"}
@@ -418,6 +419,7 @@ class WorkspaceShell(App):
         else:
             ensure_workspace_files(self.workspace, workspace_kind=workspace_type(self.workspace) or "regular")
         self.sub_title = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
+        ensure_tool_files(self.workspace, self.config.tools)
         self.show_workspace_overview()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -701,8 +703,15 @@ class WorkspaceShell(App):
             else ""
         )
         next_template = preview_file(workspace.next_file, limit=3000) if workspace.next_file.exists() else "# Next\n\n- "
+        summary, done, open_items = "", "- ", "- "
+        next_text = strip_first_heading(next_template)
+        if workspace.draft_file.exists():
+            draft = parse_combined_draft(workspace.draft_file.read_text(encoding="utf-8"))
+            summary, done, open_items = parse_last_sections(draft.last)
+            if draft.next.strip():
+                next_text = draft.next
         self.push_screen(
-            HandoffScreen(workspace.name, "", "- ", "- ", strip_first_heading(next_template), evidence),
+            HandoffScreen(workspace.name, summary, done, open_items, next_text, evidence),
             self.save_handoff,
         )
 
@@ -717,5 +726,7 @@ class WorkspaceShell(App):
         self.workspace.last_file.write_text(last.rstrip() + "\n", encoding="utf-8")
         if next_text.strip():
             self.workspace.next_file.write_text(next_text.rstrip() + "\n", encoding="utf-8")
+        if self.workspace.draft_file.exists():
+            self.workspace.draft_file.unlink()
         self.notify("Saved LAST.md and NEXT.md")
         self.show_workspace_overview()
