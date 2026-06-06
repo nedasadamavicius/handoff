@@ -69,12 +69,17 @@ The Python implementation is a validation build. File formats and the `ws` entry
 
 ## Agent handoff integration
 
-`ws` generates a tool memory file (`CLAUDE.md`, `GEMINI.md`, etc.) in the workspace root for each tool you have configured. The file instructs the agent to:
+When you open a configured agent tool from `ws`, such as `claude` or `codex`, `ws` generates that tool's memory file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, etc.) in the workspace root. These files are not created when the app itself opens. The file instructs the agent to:
 
 1. Read `.ws/WORKSPACE.md` at session start to understand the workspace context.
-2. Write `.ws/DRAFT.md` before ending the session in a structured format.
+2. Treat `.ws/DRAFT.md` as a live handoff ledger and keep the LAST.md section current after material work, including affected files and relevant `git diff` details.
+3. Save NEXT.md updates for the end of the agent session unless the next action is already clear and durable.
 
-When you press `h` to open the handoff modal, `ws` checks for `.ws/DRAFT.md` and pre-populates the fields from the agent's draft. You review, edit if needed, and save. The draft is deleted after saving.
+Agents are also instructed to refresh `.ws/DRAFT.md` before handing control back after material work, even if you did not say the session is ending.
+
+When you press `h` to open the handoff modal, `ws` checks for `.ws/DRAFT.md` and pre-populates the fields from the agent's draft. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove it in the modal. You review, edit if needed, and save. The draft is deleted after saving.
+
+After a Codex tool session exits, `ws` asks the most recent Codex session to refresh `.ws/DRAFT.md` before opening the handoff modal by running `codex exec resume --last` with a focused draft-finalization prompt.
 
 The tool file is only created if it does not already exist, so your edits are never overwritten.
 
@@ -83,6 +88,7 @@ The tool file is only created if it does not already exist, so your edits are ne
 | Tool | File created |
 |---|---|
 | claude | `CLAUDE.md` |
+| codex | `AGENTS.md` |
 | gemini | `GEMINI.md` |
 
 To add a tool, configure it in `~/.ws/config.yaml`:
@@ -92,7 +98,7 @@ tools:
   claude: "claude"
 ```
 
-Then run `ws` once — the file is created automatically on mount.
+Then open that tool from `ws`. The matching memory file is created only for the tool being opened, just before it starts.
 
 **Draft format** (`.ws/DRAFT.md`):
 

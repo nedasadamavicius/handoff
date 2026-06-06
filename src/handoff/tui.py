@@ -12,11 +12,11 @@ from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Labe
 
 from handoff.config import AppConfig
 from handoff.git import changed_files_from_status, git_status_short
-from handoff.launcher import LaunchError, editor_command, run_command, tool_command
+from handoff.launcher import LaunchError, codex_finalize_command, editor_command, run_command, tool_command
 from handoff.handoff import parse_combined_draft, parse_last_sections
 from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
-from handoff.workspace import Workspace, ensure_tool_files, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
+from handoff.workspace import Workspace, ensure_tool_file, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
 
 
 HIDDEN_TREE_NAMES = {".git", ".ws", "__pycache__", ".pytest_cache", ".claude"}
@@ -252,6 +252,43 @@ def normalize_list_text(text: str) -> str:
     return "\n".join(lines) or "- None"
 
 
+def strip_next_heading(markdown: str) -> str:
+    lines = markdown.splitlines()
+    if lines and lines[0].strip().lower() in {"# next", "## next.md"}:
+        return "\n".join(lines[1:]).lstrip()
+    return strip_first_heading(markdown)
+
+
+def deduplicate_next_lines(text: str) -> str:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        normalized = line.strip()
+        if not normalized:
+            if merged and merged[-1] != "":
+                merged.append("")
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(line)
+    while merged and not merged[-1].strip():
+        merged.pop()
+    return "\n".join(merged)
+
+
+def merge_next_text(existing: str, incoming: str) -> str:
+    existing_body = strip_next_heading(existing).strip()
+    incoming_body = strip_next_heading(incoming).strip()
+    if not incoming_body:
+        return existing_body
+    if not existing_body or existing_body == "- Define the next action.":
+        return deduplicate_next_lines(incoming_body)
+
+    return deduplicate_next_lines(existing_body + "\n" + incoming_body)
+
+
 class WorkspaceShell(App):
     TITLE = "ws"
 
@@ -419,7 +456,6 @@ class WorkspaceShell(App):
         else:
             ensure_workspace_files(self.workspace, workspace_kind=workspace_type(self.workspace) or "regular")
         self.sub_title = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
-        ensure_tool_files(self.workspace, self.config.tools)
         self.show_workspace_overview()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -563,8 +599,12 @@ class WorkspaceShell(App):
         command = tool_command(self.config, name)
         self.tools_launched.append(name)
         try:
+            ensure_tool_file(self.workspace, name, command)
             with self.suspend():
                 run_command(command, cwd=self.workspace.path, shell=True)
+                finalizer = codex_finalize_command(name, command)
+                if finalizer is not None:
+                    run_command(finalizer, cwd=self.workspace.path, shell=True)
         except LaunchError as exc:
             self.tools_launched.pop()
             self.notify(str(exc), severity="error")
@@ -709,7 +749,7 @@ class WorkspaceShell(App):
             draft = parse_combined_draft(workspace.draft_file.read_text(encoding="utf-8"))
             summary, done, open_items = parse_last_sections(draft.last)
             if draft.next.strip():
-                next_text = draft.next
+                next_text = merge_next_text(next_template, draft.next)
         self.push_screen(
             HandoffScreen(workspace.name, summary, done, open_items, next_text, evidence),
             self.save_handoff,

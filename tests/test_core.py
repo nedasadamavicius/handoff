@@ -8,11 +8,18 @@ from typer.testing import CliRunner
 
 from handoff.config import ensure_config, load_config
 from handoff.cli import app
-from handoff.handoff import HandoffDraft, parse_combined_draft, render_combined_draft
-from handoff.launcher import LaunchError, run_command
+from handoff.handoff import HandoffDraft, parse_combined_draft, parse_last_sections, render_combined_draft
+from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, run_command
 from handoff.session import parse_session_file, render_handoff
-from handoff.tui import strip_handoff_frontmatter
-from handoff.workspace import current_directory_workspace, ensure_workspace_files, infer_workspace_type, workspace_type
+from handoff.tui import merge_next_text, strip_handoff_frontmatter
+from handoff.workspace import (
+    current_directory_workspace,
+    ensure_tool_file,
+    ensure_tool_files,
+    ensure_workspace_files,
+    infer_workspace_type,
+    workspace_type,
+)
 
 
 def test_config_creation(tmp_path: Path) -> None:
@@ -76,6 +83,41 @@ def test_workspace_type_infers_code_only_from_git_directory(tmp_path: Path) -> N
     assert infer_workspace_type(current_directory_workspace(regular)) == "regular"
 
 
+def test_codex_tool_creates_agents_memory_file(tmp_path: Path) -> None:
+    workspace = current_directory_workspace(tmp_path)
+
+    ensure_tool_files(workspace, {"codex": "codex"})
+
+    path = tmp_path / "AGENTS.md"
+    assert path.exists()
+    text = path.read_text(encoding="utf-8")
+    assert "Read `.ws/WORKSPACE.md`" in text
+    assert "Treat it as the live handoff ledger" in text
+    assert "Before handing control back to the user after material work" in text
+    assert "brief summary of important `git diff` details" in text
+    assert "Do not list agent process steps" in text
+    assert "running tests" in text
+    assert "Do not spend time expanding the NEXT.md section" in text
+
+
+def test_codex_command_creates_agents_memory_file(tmp_path: Path) -> None:
+    workspace = current_directory_workspace(tmp_path)
+
+    ensure_tool_files(workspace, {"openai": "codex --full-auto"})
+
+    assert (tmp_path / "AGENTS.md").exists()
+
+
+def test_selected_tool_creates_only_its_memory_file(tmp_path: Path) -> None:
+    workspace = current_directory_workspace(tmp_path)
+
+    ensure_tool_file(workspace, "codex", "codex")
+
+    assert (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / "CLAUDE.md").exists()
+    assert not (tmp_path / "GEMINI.md").exists()
+
+
 def test_render_and_parse_session(tmp_path: Path) -> None:
     started = datetime.fromisoformat("2026-06-05T18:00:00+02:00")
     ended = datetime.fromisoformat("2026-06-05T19:00:00+02:00")
@@ -106,6 +148,20 @@ def test_missing_executable_is_launch_error(tmp_path: Path) -> None:
         raise AssertionError("Expected LaunchError")
 
 
+def test_codex_finalize_command_uses_exec_resume_last() -> None:
+    command = codex_finalize_command("codex", "codex --full-auto")
+
+    assert command is not None
+    assert command.startswith("codex exec resume --last ")
+    assert CODEX_FINALIZE_PROMPT in command
+    assert "Do not list agent process steps" in command
+
+
+def test_codex_finalize_command_skips_non_codex_tools() -> None:
+    assert codex_finalize_command("claude", "claude") is None
+    assert codex_finalize_command("codex", "npx codex") is None
+
+
 def test_combined_handoff_draft_roundtrip() -> None:
     rendered = render_combined_draft(HandoffDraft(last="# Last\n\nDone.", next="# Next\n\n- Continue."))
 
@@ -115,6 +171,25 @@ def test_combined_handoff_draft_roundtrip() -> None:
     assert parsed.next == "# Next\n\n- Continue."
 
 
+def test_parse_last_sections_drops_passive_completed_items() -> None:
+    summary, done, open_issues = parse_last_sections(
+        "### Summary\n\nUpdated handoff behavior.\n\n"
+        "### Completed\n\n"
+        "- Read `.ws/WORKSPACE.md`.\n"
+        "- Re-read `.ws/NEXT.md`.\n"
+        "- Implemented completed-item filtering.\n"
+        "- Ran pytest.\n\n"
+        "### Open Issues\n\n- None"
+    )
+
+    assert summary == "Updated handoff behavior."
+    assert "- Read" not in done
+    assert "- Re-read" not in done
+    assert "- Implemented completed-item filtering." in done
+    assert "- Ran pytest." not in done
+    assert open_issues == "- None"
+
+
 def test_strip_handoff_frontmatter(tmp_path: Path) -> None:
     path = tmp_path / "LAST.md"
     path.write_text("---\nworkspace: test\n---\n\n# Last Session\n\nDone.\n", encoding="utf-8")
@@ -122,3 +197,21 @@ def test_strip_handoff_frontmatter(tmp_path: Path) -> None:
     strip_handoff_frontmatter(path)
 
     assert path.read_text(encoding="utf-8") == "# Last Session\n\nDone.\n"
+
+
+def test_merge_next_text_preserves_existing_items() -> None:
+    existing = "# Next\n\n- Keep prior follow-up.\n- Revisit carryover."
+    incoming = "# Next\n\n- Add new follow-up."
+
+    merged = merge_next_text(existing, incoming)
+
+    assert "- Keep prior follow-up." in merged
+    assert "- Revisit carryover." in merged
+    assert "- Add new follow-up." in merged
+
+
+def test_merge_next_text_deduplicates_and_replaces_placeholder() -> None:
+    existing = "# Next\n\n- Define the next action."
+    incoming = "## NEXT.md\n\n- Real next action.\n- Real next action."
+
+    assert merge_next_text(existing, incoming) == "- Real next action."

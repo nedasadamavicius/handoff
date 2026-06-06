@@ -117,13 +117,27 @@ def infer_workspace_type(workspace: Workspace) -> str:
 
 TOOL_MEMORY_FILES: dict[str, str] = {
     "claude": "CLAUDE.md",
+    "codex": "AGENTS.md",
     "gemini": "GEMINI.md",
 }
 
 _TOOL_MEMORY_TEMPLATE = """\
-Read `.ws/WORKSPACE.md` to understand this workspace — its goals, context, and constraints.
+Read `.ws/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
 
-Before ending any session, write a handoff summary to `.ws/DRAFT.md` in this exact format:
+During the session, keep `.ws/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
+
+- what was done
+- files or areas affected
+- a brief summary of important `git diff` details, when relevant
+- unresolved questions or blockers
+
+The Completed section must describe shipped changes, decisions, fixes, or artifacts created. Do not list agent process steps such as reading, re-reading, inspecting, reviewing, searching, opening files, or running tests. Mention only the concrete outcome those steps produced.
+
+Before handing control back to the user after material work, make sure `.ws/DRAFT.md` reflects the latest completed work and evidence. Do this even if the user did not say the session is ending.
+
+Do not spend time expanding the NEXT.md section during ordinary progress updates. Fill or revise NEXT.md only when the agent session is ending or when the next action is already clear and durable.
+
+Before ending any session, make sure `.ws/DRAFT.md` uses this exact format:
 
 ## LAST.md
 
@@ -155,12 +169,16 @@ def _memory_filename(tool_name: str, command: str) -> str | None:
 
 def ensure_tool_files(workspace: Workspace, tools: dict[str, str]) -> None:
     for name, command in tools.items():
-        filename = _memory_filename(name, command)
-        if filename is None:
-            continue
-        path = workspace.path / filename
-        if not path.exists():
-            path.write_text(_TOOL_MEMORY_TEMPLATE, encoding="utf-8")
+        ensure_tool_file(workspace, name, command)
+
+
+def ensure_tool_file(workspace: Workspace, tool_name: str, command: str) -> None:
+    filename = _memory_filename(tool_name, command)
+    if filename is None:
+        return
+    path = workspace.path / filename
+    if not path.exists():
+        path.write_text(_TOOL_MEMORY_TEMPLATE, encoding="utf-8")
 
 
 def workspace_files(workspace: Workspace) -> list[Path]:
