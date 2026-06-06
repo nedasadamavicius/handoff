@@ -4,32 +4,38 @@ Handoff is for people who work in the terminal and regularly switch between proj
 
 The main use cases are study sessions and project work in GitHub repos, but the broader purpose is the same: make terminal-based work easier to resume after interruption. Instead of relying on memory, scattered notes, or long session history, Handoff keeps a small local handoff so you can return to work with context already waiting for you.
 
-## Install for development
+## Install
 
 ```bash
-poetry install
-poetry run handoff init my-notes
-cd my-notes
-poetry run handoff
+pipx install --editable .
 ```
 
-You can also use an existing repository directly:
+Then run `handoff` from any directory:
+
+```bash
+handoff init my-notes
+cd my-notes
+handoff
+```
+
+You can also open an existing repository directly:
 
 ```bash
 cd path/to/existing-repo
-poetry run handoff
+handoff
 ```
 
 On first run in a directory, `handoff` creates local metadata in `.handoff/` and opens that directory as the active workspace.
+
 
 ## Example use case: learning notes
 
 Use `handoff` as a lightweight study handoff tool:
 
 ```bash
-poetry run handoff init learning
+handoff init learning
 cd learning
-poetry run handoff
+handoff
 ```
 
 During a study session, create or edit notes in the directory. When you are done, press `h` to open the handoff draft and fill in:
@@ -41,7 +47,7 @@ When you return later:
 
 ```bash
 cd learning
-poetry run handoff
+handoff
 ```
 
 The overview shows what happened last session and what to do next, without needing a long session history.
@@ -157,6 +163,26 @@ Color roles:
 | `panel` | Panel backgrounds, unfocused borders |
 | `foreground` | Primary text |
 | `secondary` / `error` | Secondary elements, error notifications |
+
+## Dependency management
+
+Poetry manages dependencies. `pipx` makes `handoff` available from any directory via an editable install, so code changes are picked up immediately without reinstalling.
+
+To add a dependency:
+
+```bash
+poetry add <package>
+pipx reinstall handoff
+```
+
+`pipx reinstall` is only needed when dependencies change, not on every code change.
+
+### Running tests
+
+```bash
+poetry install
+poetry run pytest
+```
 
 ## Known issues
 
