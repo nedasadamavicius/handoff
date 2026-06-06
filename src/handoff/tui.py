@@ -35,7 +35,7 @@ class WorkspaceDirectoryTree(DirectoryTree):
             self.app.handle_navigation_key(event.key)
 
 
-class HandoffScreen(ModalScreen[tuple[str, str] | None]):
+class HandoffScreen(ModalScreen[dict[str, str] | None]):
     CSS = """
     HandoffScreen {
         align: center middle;
@@ -80,17 +80,36 @@ class HandoffScreen(ModalScreen[tuple[str, str] | None]):
         Binding("ctrl+s", "save", "Save", show=False),
     ]
 
-    def __init__(self, last_template: str, next_template: str) -> None:
+    def __init__(self, summary: str, done: str, open_items: str, next_template: str, evidence: str = "") -> None:
         super().__init__()
-        self.last_template = last_template
+        self.summary = summary
+        self.done = done
+        self.open_items = open_items
         self.next_template = next_template
+        self.evidence = evidence
 
     def compose(self) -> ComposeResult:
         with Vertical(id="handoff-dialog"):
-            yield Label("Current Session Summary")
+            yield Label("What did you do?")
             yield TextArea(
-                self.last_template,
-                id="handoff-last",
+                self.summary,
+                id="handoff-summary",
+                classes="handoff-field",
+                soft_wrap=True,
+                show_line_numbers=False,
+            )
+            yield Label("Completed")
+            yield TextArea(
+                self.done,
+                id="handoff-done",
+                classes="handoff-field",
+                soft_wrap=True,
+                show_line_numbers=False,
+            )
+            yield Label("Open issues / questions")
+            yield TextArea(
+                self.open_items,
+                id="handoff-open",
                 classes="handoff-field",
                 soft_wrap=True,
                 show_line_numbers=False,
@@ -103,6 +122,16 @@ class HandoffScreen(ModalScreen[tuple[str, str] | None]):
                 soft_wrap=True,
                 show_line_numbers=False,
             )
+            if self.evidence:
+                yield Label("Evidence")
+                yield TextArea(
+                    self.evidence,
+                    id="handoff-evidence",
+                    classes="handoff-field",
+                    read_only=True,
+                    soft_wrap=True,
+                    show_line_numbers=False,
+                )
             with Horizontal(id="handoff-footer"):
                 yield Label("Ctrl+Down/Up switch fields\nCtrl+S save\nEsc cancel", id="handoff-help")
                 with Horizontal(id="handoff-buttons"):
@@ -110,7 +139,7 @@ class HandoffScreen(ModalScreen[tuple[str, str] | None]):
                     yield Button("Save", id="save", variant="primary", classes="handoff-button")
 
     def on_mount(self) -> None:
-        self.query_one("#handoff-last", TextArea).focus()
+        self.query_one("#handoff-summary", TextArea).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save":
@@ -122,15 +151,27 @@ class HandoffScreen(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
     def action_save(self) -> None:
-        last = self.query_one("#handoff-last", TextArea).text
-        next_text = self.query_one("#handoff-next", TextArea).text
-        self.dismiss((last, next_text))
+        self.dismiss(
+            {
+                "summary": self.query_one("#handoff-summary", TextArea).text,
+                "done": self.query_one("#handoff-done", TextArea).text,
+                "open": self.query_one("#handoff-open", TextArea).text,
+                "next": self.query_one("#handoff-next", TextArea).text,
+                "evidence": self.evidence,
+            }
+        )
 
     def action_focus_next_field(self) -> None:
-        self.query_one("#handoff-next", TextArea).focus()
+        order = ["handoff-summary", "handoff-done", "handoff-open", "handoff-next"]
+        current = self.focused.id if self.focused else order[0]
+        index = order.index(current) if current in order else 0
+        self.query_one(f"#{order[min(index + 1, len(order) - 1)]}", TextArea).focus()
 
     def action_focus_previous_field(self) -> None:
-        self.query_one("#handoff-last", TextArea).focus()
+        order = ["handoff-summary", "handoff-done", "handoff-open", "handoff-next"]
+        current = self.focused.id if self.focused else order[0]
+        index = order.index(current) if current in order else 0
+        self.query_one(f"#{order[max(index - 1, 0)]}", TextArea).focus()
 
 
 def strip_handoff_frontmatter(path: Path) -> None:
@@ -155,6 +196,33 @@ def strip_first_heading(markdown: str) -> str:
     if lines and lines[0].startswith("# "):
         return "\n".join(lines[1:]).lstrip()
     return markdown
+
+
+def render_last_markdown(fields: dict[str, str]) -> str:
+    parts = ["# Current Session Summary"]
+    parts.append("## Summary\n\n" + (fields["summary"].strip() or "Not recorded."))
+    parts.append("## Completed\n\n" + normalize_list_text(fields["done"]))
+    parts.append("## Open Issues\n\n" + normalize_list_text(fields["open"]))
+    if fields.get("evidence", "").strip():
+        parts.append("## Evidence\n\n```text\n" + fields["evidence"].strip() + "\n```")
+    return "\n\n".join(parts)
+
+
+def render_next_markdown(text: str) -> str:
+    return "# Next\n\n" + normalize_list_text(text)
+
+
+def normalize_list_text(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned:
+        return "- None"
+    lines = []
+    for line in cleaned.splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        lines.append(item if item.startswith(("-", "*")) else f"- {item}")
+    return "\n".join(lines) or "- None"
 
 
 class WorkspaceShell(App):
@@ -568,39 +636,24 @@ class WorkspaceShell(App):
         kind = workspace_type(workspace) or "regular"
         git_status = git_status_short(workspace.path) if kind == "code" else ""
         changed_files = changed_files_from_status(git_status)
-        last_template = (
-            "# Current Session Summary\n\n"
-            "## Summary\n\n"
-            "Describe what was developed.\n\n"
-            "## Done\n"
-            "- \n\n"
-            "## Open Issues\n"
-            "- \n\n"
-            "## Evidence\n\n"
+        evidence = (
             f"Files changed:\n{chr(10).join(f'- {item}' for item in changed_files) or '- None detected'}\n\n"
             f"Tools launched:\n{chr(10).join(f'- {item}' for item in tools) or '- None tracked'}\n\n"
-            f"Git status:\n```text\n{git_status or 'No changes detected.'}\n```\n"
+            f"Git status:\n{git_status or 'No changes detected.'}"
             if kind == "code"
-            else (
-                "# Current Session Summary\n\n"
-                "## Summary\n\n"
-                "Describe what you did this session.\n\n"
-                "## Done\n"
-                "- \n\n"
-                "## Open Loops\n"
-                "- \n"
-            )
+            else ""
         )
         next_template = preview_file(workspace.next_file, limit=3000) if workspace.next_file.exists() else "# Next\n\n- "
-        self.push_screen(HandoffScreen(last_template, next_template), self.save_handoff)
+        self.push_screen(HandoffScreen("", "- ", "- ", strip_first_heading(next_template), evidence), self.save_handoff)
 
-    def save_handoff(self, result: tuple[str, str] | None) -> None:
+    def save_handoff(self, result: dict[str, str] | None) -> None:
         if result is None:
             return
-        last, next_text = result
-        if not last.strip() and not next_text.strip():
+        if not any(result[key].strip() for key in ("summary", "done", "open", "next")):
             self.notify("Handoff empty; nothing saved.")
             return
+        last = render_last_markdown(result)
+        next_text = render_next_markdown(result["next"])
         self.workspace.last_file.write_text(last.rstrip() + "\n", encoding="utf-8")
         if next_text.strip():
             self.workspace.next_file.write_text(next_text.rstrip() + "\n", encoding="utf-8")
