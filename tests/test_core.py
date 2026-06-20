@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from pathlib import Path
 
 import yaml
+from textual.app import App
+from textual.widgets import MarkdownViewer
 from typer.testing import CliRunner
 
 from handoff.config import AppConfig, ensure_config, load_config
@@ -11,7 +14,7 @@ from handoff.cli import app
 from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
 from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, run_command
 from handoff.session import parse_session_file, render_handoff, render_session_log, update_day_log
-from handoff.tui import merge_next_text, strip_handoff_frontmatter
+from handoff.tui import LogBrowserScreen, merge_next_text, strip_handoff_frontmatter
 from handoff.weekly import (
     append_week_to_worklog,
     auto_generate_draft,
@@ -255,6 +258,84 @@ def test_merge_next_text_deduplicates_and_replaces_placeholder() -> None:
     incoming = "## NEXT.md\n\n- Real next action.\n- Real next action."
 
     assert merge_next_text(existing, incoming) == "- Real next action."
+
+
+def test_log_browser_separates_loading_from_pane_focus(tmp_path: Path) -> None:
+    workspace = current_directory_workspace(tmp_path)
+    workspace.sessions_dir.mkdir(parents=True)
+    (workspace.sessions_dir / "2026-06-20-120000.md").write_text(
+        "# Newest\n\n" + "\n\n".join(f"Paragraph {number}" for number in range(100)),
+        encoding="utf-8",
+    )
+    (workspace.sessions_dir / "2026-06-19-120000.md").write_text(
+        "# Older\n\nOlder content.",
+        encoding="utf-8",
+    )
+
+    class LogBrowserApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(LogBrowserScreen(workspace))
+
+    async def exercise_browser() -> None:
+        app = LogBrowserApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, LogBrowserScreen)
+            preview_pane = screen.query_one("#log-preview-pane")
+            pane_region = preview_pane.region
+
+            await pilot.press("enter")
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert screen._focus_pane == "list"
+            assert screen.focused is screen.query_one("#tab-sessions")
+            assert preview_pane.region == pane_region
+
+            preview = screen.query_one("#log-preview", MarkdownViewer)
+            await pilot.press("right")
+            await pilot.pause()
+            assert screen._focus_pane == "preview"
+            assert screen.focused is preview
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert preview.scroll_y > 0
+
+            await pilot.press("left")
+            await pilot.pause()
+            assert screen._focus_pane == "list"
+            assert screen.focused is screen.query_one("#tab-sessions")
+            assert preview_pane.region == pane_region
+            assert preview.scroll_x == 0
+            loaded_path = screen._preview_path
+            scroll_y = preview.scroll_y
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert screen.query_one("#tab-sessions").index == 1
+            assert screen._preview_path == loaded_path
+            assert preview.scroll_y == scroll_y
+
+            await pilot.press("right")
+            await pilot.pause()
+            assert screen._focus_pane == "preview"
+            assert screen.focused is preview
+            assert screen._preview_path == loaded_path
+            assert preview.scroll_x == 0
+            assert preview.scroll_y == scroll_y
+
+            await pilot.press("left", "enter")
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert screen._preview_path is not None
+            assert screen._preview_path.name == "2026-06-19-120000.md"
+            assert screen._focus_pane == "list"
+            assert preview.scroll_y == 0
+
+    asyncio.run(exercise_browser())
 
 
 # --- weekly ---

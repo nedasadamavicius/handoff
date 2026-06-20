@@ -1,8 +1,20 @@
 # Changelog
 
+## 2026-06-21
+
+- Added an in-app log browser, opened with `s`, for browsing session, day, and week logs.
+- Added reverse-chronological log lists, formatted session timestamps, tab switching with Ctrl+Left/Right, and editor integration with `e`.
+- Matched the main workspace navigation model: Enter explicitly loads a log, Left/Right only changes pane focus, and list navigation preserves the loaded preview and scroll position.
+- Added focused-pane styling, deterministic preview scroll reset when loading a different log, and Esc-to-close behavior.
+- Prevented workspace-level navigation bindings and Markdown horizontal scrolling from interfering with the log-browser modal.
+- Added interaction coverage for explicit loading, pane focus, preserved preview state, and loading a different selected log.
+- Added and updated `FEATURES.md` to document the current product surface and remaining ideas.
+
 ## 2026-06-20
 
 - Added Claude auto-handoff prefill
+- Fixed editor launching on Windows by running configured commands through the shell and using `code --wait` for VS Code.
+- Reworked the launch overview into independently scrollable Last Session and What's Next panels with clean keyboard focus navigation.
 - Added weekly worklog feature: auto-detects unfinalized past weeks on TUI launch, auto-generates `.handoff/weeks/YYYY-W##.md` drafts from day logs, prompts user to review via `W` key, and appends approved entries to `.handoff/WORKLOG.md` (reverse chronological).
 - Added `WeeklyReviewScreen` modal with Summary, Highlights, and Carry-forwards fields.
 - Added `weekly.py` with ISO week utilities, day-log aggregation, draft rendering, and worklog append logic.
