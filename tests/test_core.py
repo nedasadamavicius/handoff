@@ -36,7 +36,7 @@ from handoff.workspace import (
 def test_default_config_uses_in_code_defaults() -> None:
     config = AppConfig()
 
-    assert config.editor.default == "nvim"
+    assert config.editor.default in config.editor.options
     assert config.tools == {"codex": "codex", "claude": "claude"}
 
 

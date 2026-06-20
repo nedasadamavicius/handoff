@@ -6,7 +6,7 @@ from pathlib import Path
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Input, Label, Markdown, MarkdownViewer, TextArea
 
@@ -562,6 +562,10 @@ class WorkspaceShell(App):
     TITLE = "handoff"
 
     CSS = """
+    * {
+        scrollbar-size-vertical: 1;
+    }
+
     #root {
         height: 100%;
     }
@@ -597,10 +601,18 @@ class WorkspaceShell(App):
         border: round $success;
     }
 
+    #last-container.focused-pane {
+        border: heavy $accent;
+    }
+
     #next-container {
         width: 1fr;
         height: 1fr;
         border: round $warning;
+    }
+
+    #next-container.focused-pane {
+        border: heavy $accent;
     }
 
     #last-header {
@@ -619,16 +631,24 @@ class WorkspaceShell(App):
         border-bottom: solid $warning;
     }
 
+    #last-scroll {
+        height: 1fr;
+    }
+
+    #next-scroll {
+        height: 1fr;
+    }
+
     #last-panel {
         width: 1fr;
-        height: 1fr;
-        padding: 0 1;
+        height: auto;
+        padding: 1 2;
     }
 
     #next-panel {
         width: 1fr;
-        height: 1fr;
-        padding: 0 1;
+        height: auto;
+        padding: 1 2;
     }
 
     #file-tree {
@@ -674,8 +694,8 @@ class WorkspaceShell(App):
         Binding("3", "launch_tool(2)", "Tool 3", show=False),
         Binding("4", "launch_tool(3)", "Tool 4", show=False),
         Binding("5", "launch_tool(4)", "Tool 5", show=False),
-        Binding("left", "focus_tree", "Files", show=False, priority=True),
-        Binding("right", "focus_preview", "Preview", show=False, priority=True),
+        Binding("left", "focus_tree", "Files", show=False),
+        Binding("right", "focus_preview", "Preview", show=False),
         Binding("up", "move_up", "Up", show=False, priority=True),
         Binding("down", "move_down", "Down", show=False, priority=True),
         Binding("pageup", "page_up", "Page Up", show=False),
@@ -709,10 +729,12 @@ class WorkspaceShell(App):
                     with Horizontal(id="overview-view"):
                         with Vertical(id="last-container"):
                             yield Label("Last Session", id="last-header")
-                            yield Markdown("", id="last-panel")
+                            with VerticalScroll(id="last-scroll"):
+                                yield Markdown("", id="last-panel")
                         with Vertical(id="next-container"):
                             yield Label("What's Next", id="next-header")
-                            yield Markdown("", id="next-panel")
+                            with VerticalScroll(id="next-scroll"):
+                                yield Markdown("", id="next-panel")
                     with Vertical(id="preview-view"):
                         yield MarkdownViewer("", show_table_of_contents=False, id="preview")
                     with Vertical(id="text-preview-view"):
@@ -928,6 +950,9 @@ class WorkspaceShell(App):
         if self.focus_area == "preview" and self.preview_mode:
             self.scroll_preview("up")
             return
+        if self.focus_area in ("last", "next"):
+            self._scroll_overview_panel(f"{self.focus_area}-panel", "up")
+            return
         focused = self.focused
         if isinstance(focused, DirectoryTree):
             focused.action_cursor_up()
@@ -939,6 +964,9 @@ class WorkspaceShell(App):
             return
         if self.focus_area == "preview" and self.preview_mode:
             self.scroll_preview("down")
+            return
+        if self.focus_area in ("last", "next"):
+            self._scroll_overview_panel(f"{self.focus_area}-panel", "down")
             return
         focused = self.focused
         if isinstance(focused, DirectoryTree):
@@ -956,21 +984,42 @@ class WorkspaceShell(App):
             self.focus_area = "preview"
             self.update_focus_styles()
 
+    def action_focus_next_overview_panel(self) -> None:
+        if self.focus_area == "last":
+            self.focus_area = "next"
+            self.update_focus_styles()
+
     def update_focus_styles(self) -> None:
         browser = self.query_one("#browser", Vertical)
         markdown_preview = self.query_one("#preview", MarkdownViewer)
         text_preview = self.query_one("#text-preview", TextArea)
+        last_container = self.query_one("#last-container", Vertical)
+        next_container = self.query_one("#next-container", Vertical)
         browser.set_class(self.focus_area == "files", "focused-pane")
         markdown_preview.set_class(self.focus_area == "preview" and self.active_preview == "markdown", "focused-pane")
         text_preview.set_class(self.focus_area == "preview" and self.active_preview == "text", "focused-pane")
+        last_container.set_class(self.focus_area == "last", "focused-pane")
+        next_container.set_class(self.focus_area == "next", "focused-pane")
 
     def handle_navigation_key(self, key: str) -> None:
         if isinstance(self.focused, TextArea):
             return
         if key == "left":
-            self.action_focus_tree()
+            if self.focus_area == "next":
+                self.focus_area = "last"
+                self.update_focus_styles()
+            elif self.focus_area == "last":
+                self.action_focus_tree()
+            else:
+                self.action_focus_tree()
         elif key == "right":
-            self.action_focus_preview()
+            if self.focus_area == "last":
+                self.action_focus_next_overview_panel()
+            elif self.focus_area == "files" and not self.preview_mode:
+                self.focus_area = "last"
+                self.update_focus_styles()
+            else:
+                self.action_focus_preview()
         elif key == "up":
             self.action_move_up()
         elif key == "down":
@@ -986,21 +1035,44 @@ class WorkspaceShell(App):
         elif key == "enter":
             self.action_select_focused()
 
+    def _scroll_overview_panel(self, panel_id: str, direction: str) -> None:
+        scroll_id = "last-scroll" if panel_id == "last-panel" else "next-scroll"
+        scroller = self.query_one(f"#{scroll_id}", VerticalScroll)
+        actions = {
+            "up": scroller.scroll_up,
+            "down": scroller.scroll_down,
+            "page_up": scroller.scroll_page_up,
+            "page_down": scroller.scroll_page_down,
+            "home": scroller.scroll_home,
+            "end": scroller.scroll_end,
+        }
+        actions[direction]()
+
     def action_page_up(self) -> None:
         if self.focus_area == "preview" and self.preview_mode:
             self.scroll_preview("page_up")
+        elif self.focus_area == "last":
+            self._scroll_overview_panel("last-panel", "page_up")
+        elif self.focus_area == "next":
+            self._scroll_overview_panel("next-panel", "page_up")
 
     def action_page_down(self) -> None:
         if self.focus_area == "preview" and self.preview_mode:
             self.scroll_preview("page_down")
+        elif self.focus_area in ("last", "next"):
+            self._scroll_overview_panel(f"{self.focus_area}-panel", "page_down")
 
     def action_scroll_home(self) -> None:
         if self.focus_area == "preview" and self.preview_mode:
             self.scroll_preview("home")
+        elif self.focus_area in ("last", "next"):
+            self._scroll_overview_panel(f"{self.focus_area}-panel", "home")
 
     def action_scroll_end(self) -> None:
         if self.focus_area == "preview" and self.preview_mode:
             self.scroll_preview("end")
+        elif self.focus_area in ("last", "next"):
+            self._scroll_overview_panel(f"{self.focus_area}-panel", "end")
 
     def scroll_preview(self, direction: str) -> None:
         preview = self.current_preview_widget()

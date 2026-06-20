@@ -13,7 +13,7 @@ REMOVED_DEFAULT_TOOLS = {"gemini"}
 
 @dataclass(frozen=True)
 class EditorConfig:
-    default: str = "ccode"
+    default: str = "code"
     options: dict[str, str] = field(
         default_factory=lambda: {
             "nvim": "nvim {file}",
