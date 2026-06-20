@@ -22,6 +22,17 @@ CODEX_FINALIZE_PROMPT = (
     "Do not make unrelated code changes."
 )
 
+CLAUDE_FINALIZE_PROMPT = (
+    "Update .handoff/DRAFT.md from the work completed in this Claude session. "
+    "Use the required handoff format from CLAUDE.md. "
+    "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'. "
+    "Complete LAST.md with what changed, affected files, relevant git diff details, and open issues. "
+    "In Completed, include shipped changes, decisions, fixes, or artifacts created. "
+    "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, or opening files; mention only the concrete outcome those steps produced. "
+    "Keep NEXT.md concise and include only durable next actions. "
+    "Do not make unrelated code changes."
+)
+
 
 def format_command(template: str, file: Path | None = None) -> list[str]:
     value = template
@@ -56,6 +67,19 @@ def codex_finalize_command(tool_name: str, command: str) -> str | None:
     if "codex" not in Path(executable).name.lower():
         return None
     return subprocess.list2cmdline([executable, "exec", "resume", "--last", CODEX_FINALIZE_PROMPT])
+
+
+def claude_finalize_command(tool_name: str, command: str) -> str | None:
+    combined = (tool_name + " " + command).lower()
+    if "claude" not in combined:
+        return None
+    parts = format_command(command)
+    if not parts:
+        return None
+    executable = parts[0]
+    if "claude" not in Path(executable).name.lower():
+        return None
+    return subprocess.list2cmdline([executable, "--continue", "-p", CLAUDE_FINALIZE_PROMPT])
 
 
 def run_command(command: list[str] | str, cwd: Path, *, shell: bool = False) -> int:

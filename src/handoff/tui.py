@@ -12,7 +12,7 @@ from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Inpu
 
 from handoff.config import AppConfig
 from handoff.git import changed_files_from_status, git_status_short
-from handoff.launcher import LaunchError, codex_finalize_command, editor_command, run_command, tool_command
+from handoff.launcher import LaunchError, claude_finalize_command, codex_finalize_command, editor_command, run_command, tool_command
 from handoff.handoff import parse_draft_or_files, parse_last_sections
 from handoff.session import now_local, render_session_log, session_filename, update_day_log
 from handoff.theme import ensure_themes_dir, register_all_themes
@@ -740,9 +740,12 @@ class WorkspaceShell(App):
             ensure_tool_file(self.workspace, name, command)
             with self.suspend():
                 run_command(command, cwd=self.workspace.path, shell=True)
-                finalizer = codex_finalize_command(name, command)
-                if finalizer is not None:
-                    run_command(finalizer, cwd=self.workspace.path, shell=True)
+                for finalizer in (
+                    codex_finalize_command(name, command),
+                    claude_finalize_command(name, command),
+                ):
+                    if finalizer is not None:
+                        run_command(finalizer, cwd=self.workspace.path, shell=True)
         except LaunchError as exc:
             self.tools_launched.pop()
             self.notify(str(exc), severity="error")
