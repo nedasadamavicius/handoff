@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-20
+
+- Added Claude auto-handoff prefill
+- Added weekly worklog feature: auto-detects unfinalized past weeks on TUI launch, auto-generates `.handoff/weeks/YYYY-W##.md` drafts from day logs, prompts user to review via `W` key, and appends approved entries to `.handoff/WORKLOG.md` (reverse chronological).
+- Added `WeeklyReviewScreen` modal with Summary, Highlights, and Carry-forwards fields.
+- Added `weekly.py` with ISO week utilities, day-log aggregation, draft rendering, and worklog append logic.
+- Added workspace properties: `weeks_dir`, `week_file()`, `worklog_file`.
+- Added 8 new tests covering weekly aggregation, pending detection, draft lifecycle, and worklog append.
+
 ## 2026-06-06
 
 - Added the first local workspace TUI prototype with a current-directory workflow.

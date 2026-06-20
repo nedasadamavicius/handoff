@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import yaml
@@ -10,8 +10,19 @@ from handoff.config import AppConfig, ensure_config, load_config
 from handoff.cli import app
 from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
 from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, run_command
-from handoff.session import parse_session_file, render_handoff
+from handoff.session import parse_session_file, render_handoff, render_session_log, update_day_log
 from handoff.tui import merge_next_text, strip_handoff_frontmatter
+from handoff.weekly import (
+    append_week_to_worklog,
+    auto_generate_draft,
+    collect_week_data,
+    find_pending_weeks,
+    finalize_week_draft,
+    read_week_draft,
+    week_date_range,
+    week_key,
+    week_label,
+)
 from handoff.workspace import (
     current_directory_workspace,
     ensure_tool_file,
@@ -244,3 +255,129 @@ def test_merge_next_text_deduplicates_and_replaces_placeholder() -> None:
     incoming = "## NEXT.md\n\n- Real next action.\n- Real next action."
 
     assert merge_next_text(existing, incoming) == "- Real next action."
+
+
+# --- weekly ---
+
+def _write_day(days_dir: Path, day: date, completed: str, open_issues: str, sessions: list[str]) -> None:
+    days_dir.mkdir(parents=True, exist_ok=True)
+    from handoff.session import render_day_log
+    content = render_day_log(
+        workspace="test",
+        day=day,
+        session_files=sessions,
+        latest_summary="Did some work.",
+        completed=[c.lstrip("- ").strip() for c in completed.splitlines() if c.strip()],
+        open_issues=[o.lstrip("- ").strip() for o in open_issues.splitlines() if o.strip()],
+        session_rows=[f"- 10:00 - Did some work. (`sessions/{s}`)" for s in sessions],
+    )
+    (days_dir / f"{day.isoformat()}.md").write_text(content, encoding="utf-8")
+
+
+def test_week_key_and_date_range() -> None:
+    assert week_key(date(2026, 6, 15)) == (2026, 25)  # Monday of W25
+    assert week_key(date(2026, 6, 21)) == (2026, 25)  # Sunday of W25
+    assert week_key(date(2026, 6, 22)) == (2026, 26)  # Monday of W26
+
+    label = week_date_range(2026, 25)
+    assert "Jun" in label
+    assert "15" in label
+    assert "21" in label
+
+    cross_month = week_date_range(2026, 27)  # Jun 29 – Jul 5
+    assert "Jun" in cross_month
+    assert "Jul" in cross_month
+
+
+def test_collect_week_data_aggregates_days(tmp_path: Path) -> None:
+    days_dir = tmp_path / "days"
+    _write_day(days_dir, date(2026, 6, 15), "- Shipped feature A", "- Blocker X", ["s1.md"])
+    _write_day(days_dir, date(2026, 6, 16), "- Fixed bug B", "- None", ["s2.md", "s3.md"])
+    _write_day(days_dir, date(2026, 6, 22), "- Unrelated next week", "- None", ["s4.md"])
+
+    data = collect_week_data(days_dir, 2026, 25)
+
+    assert data.year == 2026
+    assert data.week == 25
+    assert len(data.days) == 2
+    assert data.session_count == 3
+    assert any("Shipped feature A" in item for item in data.completed)
+    assert any("Fixed bug B" in item for item in data.completed)
+    assert not any("Unrelated" in item for item in data.completed)
+
+
+def test_find_pending_weeks_detects_unfinalized_week(tmp_path: Path) -> None:
+    days_dir = tmp_path / "days"
+    weeks_dir = tmp_path / "weeks"
+    # W24 (Jun 8) is a genuinely past week relative to today (Jun 20, W25)
+    _write_day(days_dir, date(2026, 6, 8), "- Done A", "- None", ["s1.md"])
+
+    pending = find_pending_weeks(days_dir, weeks_dir)
+
+    assert (2026, 24) in pending
+
+
+def test_find_pending_weeks_skips_current_week(tmp_path: Path, monkeypatch) -> None:
+    days_dir = tmp_path / "days"
+    weeks_dir = tmp_path / "weeks"
+    today = date.today()
+    _write_day(days_dir, today, "- Done today", "- None", ["s1.md"])
+
+    pending = find_pending_weeks(days_dir, weeks_dir)
+
+    assert week_key(today) not in pending
+
+
+def test_auto_generate_draft_creates_week_file(tmp_path: Path) -> None:
+    days_dir = tmp_path / "days"
+    weeks_dir = tmp_path / "weeks"
+    _write_day(days_dir, date(2026, 6, 15), "- Shipped feature A", "- None", ["s1.md"])
+
+    path = auto_generate_draft("test", days_dir, weeks_dir, 2026, 25)
+
+    assert path.exists()
+    text = path.read_text(encoding="utf-8")
+    assert "2026-W25" in text
+    assert "status: draft" in text
+    assert "Shipped feature A" in text
+
+
+def test_read_week_draft_returns_sections(tmp_path: Path) -> None:
+    days_dir = tmp_path / "days"
+    weeks_dir = tmp_path / "weeks"
+    _write_day(days_dir, date(2026, 6, 15), "- Shipped feature A", "- Carry this", ["s1.md"])
+    auto_generate_draft("test", days_dir, weeks_dir, 2026, 25)
+
+    fields = read_week_draft(weeks_dir, 2026, 25)
+
+    assert fields is not None
+    summary, highlights, carry_forwards = fields
+    assert "session" in summary.lower()
+    assert "Shipped feature A" in highlights
+    assert "Carry this" in carry_forwards
+
+
+def test_append_week_to_worklog_creates_and_prepends(tmp_path: Path) -> None:
+    worklog = tmp_path / "WORKLOG.md"
+
+    append_week_to_worklog(worklog, 2026, 24, "First week.", "- Built X", "- None")
+    append_week_to_worklog(worklog, 2026, 25, "Second week.", "- Built Y", "- Follow up on Z")
+
+    text = worklog.read_text(encoding="utf-8")
+    assert text.startswith("# Work Log")
+    # W25 is newer, should appear before W24
+    assert text.index("2026-W25") < text.index("2026-W24")
+    assert "Built Y" in text
+    assert "Follow up on Z" in text
+
+
+def test_finalize_week_draft_marks_as_finalized(tmp_path: Path) -> None:
+    days_dir = tmp_path / "days"
+    weeks_dir = tmp_path / "weeks"
+    _write_day(days_dir, date(2026, 6, 15), "- Done", "- None", ["s1.md"])
+    auto_generate_draft("test", days_dir, weeks_dir, 2026, 25)
+
+    finalize_week_draft(weeks_dir, 2026, 25)
+    pending = find_pending_weeks(days_dir, weeks_dir)
+
+    assert (2026, 25) not in pending

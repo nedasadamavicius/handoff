@@ -16,6 +16,7 @@ from handoff.launcher import LaunchError, claude_finalize_command, codex_finaliz
 from handoff.handoff import parse_draft_or_files, parse_last_sections
 from handoff.session import now_local, render_session_log, session_filename, update_day_log
 from handoff.theme import ensure_themes_dir, register_all_themes
+from handoff.weekly import append_week_to_worklog, auto_generate_draft, find_pending_weeks, finalize_week_draft, read_week_draft, week_label
 from handoff.workspace import Workspace, ensure_tool_file, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
 
 
@@ -297,6 +298,171 @@ class NewFileScreen(ModalScreen[str | None]):
         self.dismiss(filename if filename else None)
 
 
+class WeeklyReviewScreen(ModalScreen[dict[str, str] | None]):
+    FIELD_ORDER = [
+        ("page-summary", "weekly-summary", "Summary"),
+        ("page-highlights", "weekly-highlights", "Highlights"),
+        ("page-carry", "weekly-carry", "Carry-forwards"),
+    ]
+
+    CSS = """
+    WeeklyReviewScreen {
+        align: center middle;
+    }
+
+    #weekly-dialog {
+        width: 88;
+        height: 90%;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #weekly-title {
+        height: auto;
+        text-style: bold;
+        color: $accent;
+        padding: 0;
+    }
+
+    #weekly-page-status {
+        height: auto;
+        color: $text-muted;
+        padding: 0 0 1 0;
+        border-bottom: solid $panel-darken-2;
+    }
+
+    #weekly-pages {
+        height: 1fr;
+        margin-top: 1;
+    }
+
+    .weekly-page {
+        height: 1fr;
+    }
+
+    .weekly-field-label {
+        height: auto;
+        padding: 1 0;
+        text-style: bold;
+        color: $text-muted;
+    }
+
+    .weekly-field {
+        height: 1fr;
+        border: round $secondary;
+    }
+
+    #weekly-buttons {
+        height: auto;
+        align-horizontal: right;
+    }
+
+    #weekly-footer {
+        height: auto;
+        padding-top: 1;
+    }
+
+    #weekly-help {
+        width: 1fr;
+        color: $text-muted;
+    }
+
+    .weekly-button {
+        width: 9;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("ctrl+right", "next_field", "Next Field", show=False, priority=True),
+        Binding("ctrl+left", "previous_field", "Previous Field", show=False, priority=True),
+        Binding("ctrl+s", "save", "Save", show=False),
+    ]
+
+    def __init__(self, year: int, week: int, summary: str, highlights: str, carry_forwards: str) -> None:
+        super().__init__()
+        self.year = year
+        self.week = week
+        self.summary = summary
+        self.highlights = highlights
+        self.carry_forwards = carry_forwards
+        self.current_field_index = 0
+
+    def compose(self) -> ComposeResult:
+        label = week_label(self.year, self.week)
+        with Vertical(id="weekly-dialog"):
+            yield Label(f"Weekly Review — {label}", id="weekly-title")
+            yield Label("", id="weekly-page-status")
+            with ContentSwitcher(initial="page-summary", id="weekly-pages"):
+                with Vertical(id="page-summary", classes="weekly-page"):
+                    yield Label("Summary", classes="weekly-field-label")
+                    yield TextArea(
+                        self.summary,
+                        id="weekly-summary",
+                        classes="weekly-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                with Vertical(id="page-highlights", classes="weekly-page"):
+                    yield Label("Highlights  (what shipped this week)", classes="weekly-field-label")
+                    yield TextArea(
+                        self.highlights,
+                        id="weekly-highlights",
+                        classes="weekly-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+                with Vertical(id="page-carry", classes="weekly-page"):
+                    yield Label("Carry-forwards  (open items into next week)", classes="weekly-field-label")
+                    yield TextArea(
+                        self.carry_forwards,
+                        id="weekly-carry",
+                        classes="weekly-field",
+                        soft_wrap=True,
+                        show_line_numbers=False,
+                    )
+            with Horizontal(id="weekly-footer"):
+                yield Label("Ctrl+Left/Right switch fields\nCtrl+S save\nEsc cancel", id="weekly-help")
+                with Horizontal(id="weekly-buttons"):
+                    yield Button("Skip", id="cancel", classes="weekly-button")
+                    yield Button("Save", id="save", variant="primary", classes="weekly-button")
+
+    def on_mount(self) -> None:
+        self.show_field(0)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save":
+            self.action_save()
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_save(self) -> None:
+        self.dismiss({
+            "summary": self.query_one("#weekly-summary", TextArea).text,
+            "highlights": self.query_one("#weekly-highlights", TextArea).text,
+            "carry_forwards": self.query_one("#weekly-carry", TextArea).text,
+        })
+
+    def show_field(self, index: int) -> None:
+        self.current_field_index = index % len(self.FIELD_ORDER)
+        page_id, field_id, label = self.FIELD_ORDER[self.current_field_index]
+        self.query_one("#weekly-pages", ContentSwitcher).current = page_id
+        self.query_one("#weekly-page-status", Label).update(
+            f"{label} ({self.current_field_index + 1}/{len(self.FIELD_ORDER)})"
+        )
+        self.query_one(f"#{field_id}", TextArea).focus()
+
+    def action_next_field(self) -> None:
+        self.show_field(self.current_field_index + 1)
+
+    def action_previous_field(self) -> None:
+        self.show_field(self.current_field_index - 1)
+
+
 def strip_handoff_frontmatter(path: Path) -> None:
     if not path.exists():
         return
@@ -502,6 +668,7 @@ class WorkspaceShell(App):
         Binding("l", "edit_last", "Edit Last"),
         Binding("n", "edit_next", "Edit Next"),
         Binding("t", "tool", "Tool"),
+        Binding("W", "weekly_review", "Week Review"),
         Binding("1", "launch_tool(0)", "Tool 1", show=False),
         Binding("2", "launch_tool(1)", "Tool 2", show=False),
         Binding("3", "launch_tool(2)", "Tool 3", show=False),
@@ -531,6 +698,7 @@ class WorkspaceShell(App):
         self.preview_mode = False
         self.focus_area = "files"
         self.active_preview = "markdown"
+        self.pending_weeks: list[tuple[int, int]] = []
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="root"):
@@ -561,6 +729,7 @@ class WorkspaceShell(App):
             ensure_workspace_files(self.workspace, workspace_kind=workspace_type(self.workspace) or "regular")
         self.sub_title = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
         self.show_workspace_overview()
+        self._check_pending_weeks()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         text_area_actions = {
@@ -869,6 +1038,59 @@ class WorkspaceShell(App):
         focused = self.focused
         if isinstance(focused, DirectoryTree):
             focused.action_select_cursor()
+
+    def _check_pending_weeks(self) -> None:
+        workspace = self.workspace
+        pending = find_pending_weeks(workspace.days_dir, workspace.weeks_dir)
+        for year, week in pending:
+            week_path = workspace.week_file(year, week)
+            if not week_path.exists():
+                auto_generate_draft(workspace.name, workspace.days_dir, workspace.weeks_dir, year, week)
+        self.pending_weeks = pending
+        if pending:
+            label = week_label(*pending[0])
+            self.notify(
+                f"Weekly draft ready: {label}\nPress W to review and add to worklog.",
+                timeout=10,
+            )
+
+    def action_weekly_review(self) -> None:
+        if not self.pending_weeks:
+            if self.workspace.worklog_file.exists():
+                self.show_markdown_preview(self.workspace.worklog_file.read_text(encoding="utf-8"))
+            else:
+                self.notify("No pending weekly drafts. Work some sessions first!", severity="information")
+            return
+        year, week = self.pending_weeks[0]
+        fields = read_week_draft(self.workspace.weeks_dir, year, week)
+        if fields is None:
+            auto_generate_draft(self.workspace.name, self.workspace.days_dir, self.workspace.weeks_dir, year, week)
+            fields = read_week_draft(self.workspace.weeks_dir, year, week) or ("", "", "")
+        summary, highlights, carry_forwards = fields
+        self.push_screen(
+            WeeklyReviewScreen(year, week, summary, highlights, carry_forwards),
+            lambda result: self._save_weekly(result, year, week),
+        )
+
+    def _save_weekly(self, result: dict[str, str] | None, year: int, week: int) -> None:
+        if result is None:
+            return
+        append_week_to_worklog(
+            self.workspace.worklog_file,
+            year,
+            week,
+            result["summary"],
+            result["highlights"],
+            result["carry_forwards"],
+        )
+        finalize_week_draft(self.workspace.weeks_dir, year, week)
+        self.pending_weeks = [w for w in self.pending_weeks if w != (year, week)]
+        if self.pending_weeks:
+            next_label = week_label(*self.pending_weeks[0])
+            self.notify(f"Saved. Another draft ready: {next_label} — press W to continue.", timeout=8)
+        else:
+            self.notify("Worklog updated.")
+        self.action_refresh()
 
     def action_handoff(self) -> None:
         workspace = self.workspace

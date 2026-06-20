@@ -47,8 +47,19 @@ class Workspace:
     def days_dir(self) -> Path:
         return self.meta / "days"
 
+    @property
+    def weeks_dir(self) -> Path:
+        return self.meta / "weeks"
+
+    @property
+    def worklog_file(self) -> Path:
+        return self.meta / "WORKLOG.md"
+
     def day_file(self, value: date) -> Path:
         return self.days_dir / f"{value.isoformat()}.md"
+
+    def week_file(self, year: int, week: int) -> Path:
+        return self.weeks_dir / f"{year}-W{week:02d}.md"
 
     def last_handoff(self) -> SessionFile | None:
         return read_handoff(self.last_file)
