@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from handoff.documents import parse_markdown_sections
+
 
 LAST_MARKER = "## LAST.md"
 NEXT_MARKER = "## NEXT.md"
@@ -96,17 +98,9 @@ def remove_low_value_completed_items(text: str) -> str:
 def parse_last_sections(text: str) -> tuple[str, str, str]:
     """Extract (summary, done, open_issues) from a structured LAST.md draft section."""
     text = normalize_handoff_markdown(text)
-    lines_by_section: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in text.splitlines():
-        if line.startswith(("## ", "### ")):
-            current = line.lstrip("#").strip().lower()
-            lines_by_section[current] = []
-        elif current is not None:
-            lines_by_section[current].append(line)
+    sections = parse_markdown_sections(text, heading_prefixes=("## ", "### "))
     summary = done = open_issues = ""
-    for key, lines in lines_by_section.items():
-        content = "\n".join(lines).strip()
+    for key, content in sections.items():
         if "summary" in key:
             summary = content
         elif "completed" in key or "done" in key:

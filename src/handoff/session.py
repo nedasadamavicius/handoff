@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from handoff.documents import parse_markdown_sections
+
 
 @dataclass(frozen=True)
 class SessionFile:
@@ -154,18 +156,6 @@ def merge_items(existing: list[str], incoming: list[str]) -> list[str]:
         seen.add(key)
         merged.append(normalized)
     return merged
-
-
-def parse_markdown_sections(body: str) -> dict[str, str]:
-    sections: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in body.splitlines():
-        if line.startswith("## "):
-            current = line[3:].strip().lower()
-            sections[current] = []
-        elif current is not None:
-            sections[current].append(line)
-    return {key: "\n".join(lines).strip() for key, lines in sections.items()}
 
 
 def render_day_log(

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from handoff.session import SessionFile, bullet_items, merge_items, parse_session_file
+from handoff.documents import parse_markdown_sections
+from handoff.session import SessionFile, bullet_items, merge_items, normalize_bullets, parse_session_file
 
 
 _MONTHS = [
@@ -54,18 +55,6 @@ class WeekData:
     session_count: int
 
 
-def _parse_sections(body: str) -> dict[str, str]:
-    sections: dict[str, list[str]] = {}
-    current: str | None = None
-    for line in body.splitlines():
-        if line.startswith("## ") or line.startswith("### "):
-            current = line.lstrip("#").strip().lower()
-            sections[current] = []
-        elif current is not None:
-            sections[current].append(line)
-    return {k: "\n".join(v).strip() for k, v in sections.items()}
-
-
 def collect_week_data(days_dir: Path, year: int, week: int) -> WeekData:
     days: list[date] = []
     completed: list[str] = []
@@ -85,7 +74,7 @@ def collect_week_data(days_dir: Path, year: int, week: int) -> WeekData:
         days.append(d)
         sf = parse_session_file(path)
         body_no_h1 = "\n".join(l for l in sf.body.splitlines() if not l.startswith("# "))
-        sections = _parse_sections(body_no_h1)
+        sections = parse_markdown_sections(body_no_h1, heading_prefixes=("## ", "### "))
         completed = merge_items(completed, bullet_items(sections.get("completed", "")))
         open_issues = merge_items(open_issues, bullet_items(sections.get("open issues", "")))
         raw_sessions = sf.metadata.get("sessions") or []
@@ -178,7 +167,7 @@ def read_week_draft(weeks_dir: Path, year: int, week: int) -> tuple[str, str, st
         return None
     sf = parse_session_file(path)
     body_no_h1 = "\n".join(l for l in sf.body.splitlines() if not l.startswith("# "))
-    sections = _parse_sections(body_no_h1)
+    sections = parse_markdown_sections(body_no_h1, heading_prefixes=("## ", "### "))
     return (
         sections.get("summary", ""),
         sections.get("highlights", ""),
@@ -205,11 +194,11 @@ def append_week_to_worklog(
         "",
         "### Highlights",
         "",
-        _normalize_bullets(highlights),
+        normalize_bullets(highlights),
         "",
         "### Carry-forwards",
         "",
-        _normalize_bullets(carry_forwards),
+        normalize_bullets(carry_forwards),
     ]
     entry = "\n".join(entry_lines)
 
@@ -233,11 +222,6 @@ def finalize_week_draft(weeks_dir: Path, year: int, week: int) -> None:
     text = path.read_text(encoding="utf-8")
     text = text.replace("status: draft", "status: finalized", 1)
     path.write_text(text, encoding="utf-8")
-
-
-def _normalize_bullets(text: str) -> str:
-    items = bullet_items(text)
-    return "\n".join(f"- {item}" for item in items) if items else "- None"
 
 
 def _normalize_bullets_list(items: list[str]) -> str:
