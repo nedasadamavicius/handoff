@@ -76,9 +76,10 @@ def load_config(root: Path = DEFAULT_ROOT) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     configured_root = Path(raw.get("root") or root).expanduser()
     editor_raw = raw.get("editor") or {}
+    editor_defaults = EditorConfig()
     editor = EditorConfig(
-        default=editor_raw.get("default") or "nvim",
-        options=dict(editor_raw.get("options") or EditorConfig().options),
+        default=editor_raw.get("default") or editor_defaults.default,
+        options=dict(editor_raw.get("options") or editor_defaults.options),
     )
     tools = {
         name: command
