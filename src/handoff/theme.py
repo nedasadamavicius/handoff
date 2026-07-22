@@ -16,13 +16,13 @@ GRAPHITE_CRIMSON = Theme(
     dark=True,
     primary="#DC143C",
     secondary="#8B0000",
-    accent="#C0392B",
+    accent="#FF3355",
     warning="#DC143C",
     success="#8B0000",
     error="#FF3333",
-    background="#0d0d0d",
-    surface="#171717",
-    panel="#222222",
+    background="#080808",
+    surface="#121212",
+    panel="#1d1d1d",
     foreground="#e8e8e8",
 )
 
