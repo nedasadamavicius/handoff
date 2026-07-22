@@ -79,7 +79,10 @@ def claude_finalize_command(tool_name: str, command: str) -> str | None:
     executable = parts[0]
     if "claude" not in Path(executable).name.lower():
         return None
-    return subprocess.list2cmdline([executable, "--continue", "-p", CLAUDE_FINALIZE_PROMPT])
+    return subprocess.list2cmdline([
+        executable, "--continue", "-p", CLAUDE_FINALIZE_PROMPT,
+        "--allowedTools", "Write(.handoff/*),Edit(.handoff/*)",
+    ])
 
 
 def run_command(command: list[str] | str, cwd: Path, *, shell: bool = False) -> int:
