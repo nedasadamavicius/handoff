@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 from textual.app import App
-from textual.widgets import MarkdownViewer
+from textual.widgets import Input, MarkdownViewer, TextArea
 from typer.testing import CliRunner
 
 from handoff.config import AppConfig, ensure_config, load_config
@@ -14,7 +14,7 @@ from handoff.cli import app
 from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
 from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, run_command
 from handoff.session import parse_session_file, render_handoff, render_session_log, update_day_log
-from handoff.tui import LogBrowserScreen, merge_next_text, strip_handoff_frontmatter
+from handoff.tui import HandoffScreen, LogBrowserScreen, NewEntryScreen, WorkspaceShell, merge_next_text, strip_handoff_frontmatter
 from handoff.weekly import (
     append_week_to_worklog,
     auto_generate_draft,
@@ -258,6 +258,72 @@ def test_merge_next_text_deduplicates_and_replaces_placeholder() -> None:
     incoming = "## NEXT.md\n\n- Real next action.\n- Real next action."
 
     assert merge_next_text(existing, incoming) == "- Real next action."
+
+
+def test_handoff_fields_support_standard_selection_and_clipboard_shortcuts() -> None:
+    class HandoffApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(HandoffScreen("test", "Original text", "- Done", "- None", "- Next"))
+
+    async def exercise_editor() -> None:
+        app = HandoffApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            field = app.screen.query_one("#handoff-summary", TextArea)
+
+            field.load_text("First line\nSecond line")
+            field.move_cursor((0, 3))
+            await pilot.press("down")
+            assert field.cursor_location == (1, 3)
+            await pilot.press("up", "shift+down")
+            assert field.selected_text == "st line\nSec"
+
+            await pilot.press("ctrl+a", "ctrl+c")
+            assert field.selected_text == "First line\nSecond line"
+            assert app.clipboard == "First line\nSecond line"
+
+            await pilot.press("backspace")
+            assert field.text == ""
+
+            app.copy_to_clipboard("Pasted text")
+            await pilot.press("ctrl+v")
+            assert field.text == "Pasted text"
+
+            await pilot.press("ctrl+shift+left", "ctrl+x")
+            assert field.text == "Pasted "
+            assert app.clipboard == "text"
+
+    asyncio.run(exercise_editor())
+
+    arrow_bindings = {
+        binding.key: binding
+        for binding in WorkspaceShell.BINDINGS
+        if binding.key in {"up", "down"}
+    }
+    assert not arrow_bindings["up"].priority
+    assert not arrow_bindings["down"].priority
+
+
+def test_new_folder_action_creates_folder_in_workspace(tmp_path: Path) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    async def exercise_new_folder() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, NewEntryScreen)
+
+            app.screen.query_one("#new-entry-input", Input).value = "notes"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert (workspace_path / "notes").is_dir()
+
+    asyncio.run(exercise_new_folder())
 
 
 def test_log_browser_separates_loading_from_pane_focus(tmp_path: Path) -> None:
