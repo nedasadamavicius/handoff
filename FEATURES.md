@@ -80,6 +80,7 @@
 
 ### File Management
 - `c` key opens a "New File" modal — creates a file in the currently selected directory
+- `d` key opens a "New Folder" modal — creates a folder in the currently selected directory
 - File path relative to workspace root tracked in session log when previewed
 
 ---

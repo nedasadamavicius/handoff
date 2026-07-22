@@ -1,27 +1,63 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
-from textual.widgets import Button, ContentSwitcher, DirectoryTree, Footer, Input, Label, ListItem, ListView, Markdown, MarkdownViewer, TextArea
+from textual.widgets import ContentSwitcher, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
 
 from handoff.config import AppConfig
+from handoff.documents import (
+    MARKDOWN_SUFFIXES,
+    deduplicate_next_lines,
+    is_markdown_file,
+    merge_next_text,
+    normalize_list_text,
+    render_last_markdown,
+    render_next_markdown,
+    strip_first_heading,
+    strip_first_subheading,
+    strip_handoff_frontmatter,
+    strip_next_heading,
+    strip_yaml_frontmatter,
+)
 from handoff.git import changed_files_from_status, git_status_short
-from handoff.launcher import LaunchError, claude_finalize_command, codex_finalize_command, editor_command, run_command, tool_command
+from handoff.launcher import (
+    LaunchError,
+    claude_finalize_command,
+    codex_finalize_command,
+    editor_command,
+    run_command,
+    tool_command,
+)
 from handoff.handoff import parse_draft_or_files, parse_last_sections
-from handoff.session import now_local, render_session_log, session_filename, update_day_log
+from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
-from handoff.weekly import append_week_to_worklog, auto_generate_draft, find_pending_weeks, finalize_week_draft, read_week_draft, week_label
-from handoff.workspace import Workspace, ensure_tool_file, ensure_workspace_files, infer_workspace_type, preview_file, workspace_type
+from handoff.tui_forms import EditableInput, EditableTextArea
+from handoff.tui_logs import LogBrowserScreen, LogPreview
+from handoff.tui_screens import EntryKind, HandoffScreen, NewEntryScreen, WeeklyReviewScreen
+from handoff.weekly import (
+    append_week_to_worklog,
+    auto_generate_draft,
+    finalize_week_draft,
+    find_pending_weeks,
+    read_week_draft,
+    week_label,
+)
+from handoff.workflows import save_workspace_handoff
+from handoff.workspace import (
+    Workspace,
+    ensure_tool_file,
+    ensure_workspace_files,
+    infer_workspace_type,
+    preview_file,
+    workspace_type,
+)
 
 
 HIDDEN_TREE_NAMES = {".git", ".handoff", "__pycache__", ".pytest_cache", ".claude"}
-MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdown", ".mkdn"}
 
 
 class WorkspaceDirectoryTree(DirectoryTree):
@@ -38,797 +74,6 @@ class WorkspaceDirectoryTree(DirectoryTree):
             self.app.handle_navigation_key(event.key)
 
 
-class HandoffScreen(ModalScreen[dict[str, str] | None]):
-    FIELD_ORDER = [
-        ("page-summary", "handoff-summary", "Summary"),
-        ("page-done", "handoff-done", "Completed"),
-        ("page-open", "handoff-open", "Open issues"),
-        ("page-next", "handoff-next", "Next session"),
-    ]
-
-    CSS = """
-    HandoffScreen {
-        align: center middle;
-    }
-
-    #handoff-dialog {
-        width: 88;
-        height: 90%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #handoff-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
-        padding: 0;
-    }
-
-    #handoff-page-status {
-        height: auto;
-        color: $text-muted;
-        padding: 0 0 1 0;
-        border-bottom: solid $panel-darken-2;
-    }
-
-    .field-label {
-        height: auto;
-        padding: 1 0;
-        text-style: bold;
-        color: $text-muted;
-    }
-
-    #handoff-pages {
-        height: 1fr;
-        margin-top: 1;
-    }
-
-    .handoff-page {
-        height: 1fr;
-    }
-
-    .handoff-field {
-        height: 1fr;
-        border: round $secondary;
-    }
-
-    #handoff-buttons {
-        height: auto;
-        align-horizontal: right;
-    }
-
-    #handoff-footer {
-        height: auto;
-        padding-top: 1;
-    }
-
-    #handoff-help {
-        width: 1fr;
-        color: $text-muted;
-    }
-
-    .handoff-button {
-        width: 9;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=False),
-        Binding("ctrl+right", "next_field", "Next Field", show=False, priority=True),
-        Binding("ctrl+left", "previous_field", "Previous Field", show=False, priority=True),
-        Binding("ctrl+s", "save", "Save", show=False),
-    ]
-
-    def __init__(self, workspace_name: str, summary: str, done: str, open_items: str, next_template: str, evidence: str = "") -> None:
-        super().__init__()
-        self.workspace_name = workspace_name
-        self.summary = summary
-        self.done = done
-        self.open_items = open_items
-        self.next_template = next_template
-        self.evidence = evidence
-        self.current_field_index = 0
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="handoff-dialog"):
-            yield Label(f"Session Handoff - {self.workspace_name}", id="handoff-title")
-            yield Label("", id="handoff-page-status")
-            with ContentSwitcher(initial="page-summary", id="handoff-pages"):
-                with Vertical(id="page-summary", classes="handoff-page"):
-                    yield Label("Summary", classes="field-label")
-                    yield TextArea(
-                        self.summary,
-                        id="handoff-summary",
-                        classes="handoff-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-                with Vertical(id="page-done", classes="handoff-page"):
-                    yield Label("Completed", classes="field-label")
-                    yield TextArea(
-                        self.done,
-                        id="handoff-done",
-                        classes="handoff-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-                with Vertical(id="page-open", classes="handoff-page"):
-                    yield Label("Open issues", classes="field-label")
-                    yield TextArea(
-                        self.open_items,
-                        id="handoff-open",
-                        classes="handoff-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-                with Vertical(id="page-next", classes="handoff-page"):
-                    yield Label("Next session", classes="field-label")
-                    yield TextArea(
-                        self.next_template,
-                        id="handoff-next",
-                        classes="handoff-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-                if self.evidence:
-                    with Vertical(id="page-evidence", classes="handoff-page"):
-                        yield Label("Evidence", classes="field-label")
-                        yield TextArea(
-                            self.evidence,
-                            id="handoff-evidence",
-                            classes="handoff-field",
-                            read_only=True,
-                            soft_wrap=True,
-                            show_line_numbers=False,
-                        )
-            with Horizontal(id="handoff-footer"):
-                yield Label("Ctrl+Left/Right switch fields\nCtrl+S save\nEsc cancel", id="handoff-help")
-                with Horizontal(id="handoff-buttons"):
-                    yield Button("Cancel", id="cancel", classes="handoff-button")
-                    yield Button("Save", id="save", variant="primary", classes="handoff-button")
-
-    def on_mount(self) -> None:
-        self.show_field(0)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "save":
-            self.action_save()
-        else:
-            self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_save(self) -> None:
-        self.dismiss(
-            {
-                "summary": self.query_one("#handoff-summary", TextArea).text,
-                "done": self.query_one("#handoff-done", TextArea).text,
-                "open": self.query_one("#handoff-open", TextArea).text,
-                "next": self.query_one("#handoff-next", TextArea).text,
-                "evidence": self.evidence,
-            }
-        )
-
-    def show_field(self, index: int) -> None:
-        self.current_field_index = index % len(self.FIELD_ORDER)
-        page_id, field_id, label = self.FIELD_ORDER[self.current_field_index]
-        self.query_one("#handoff-pages", ContentSwitcher).current = page_id
-        self.query_one("#handoff-page-status", Label).update(f"{label} ({self.current_field_index + 1}/{len(self.FIELD_ORDER)})")
-        self.query_one(f"#{field_id}", TextArea).focus()
-
-    def action_next_field(self) -> None:
-        self.show_field(self.current_field_index + 1)
-
-    def action_previous_field(self) -> None:
-        self.show_field(self.current_field_index - 1)
-
-
-class NewFileScreen(ModalScreen[str | None]):
-    CSS = """
-    NewFileScreen {
-        align: center middle;
-    }
-
-    #new-file-dialog {
-        width: 60;
-        height: auto;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #new-file-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
-        padding: 0 0 1 0;
-    }
-
-    #new-file-input {
-        margin-top: 1;
-    }
-
-    #new-file-buttons {
-        height: auto;
-        align-horizontal: right;
-        margin-top: 1;
-    }
-
-    .new-file-button {
-        width: 9;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=False),
-    ]
-
-    def __init__(self, directory: Path) -> None:
-        super().__init__()
-        self.directory = directory
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="new-file-dialog"):
-            yield Label(f"New file in {self.directory.name}/", id="new-file-title")
-            yield Input(placeholder="filename.md", id="new-file-input")
-            with Horizontal(id="new-file-buttons"):
-                yield Button("Cancel", id="cancel", classes="new-file-button")
-                yield Button("Create", id="create", variant="primary", classes="new-file-button")
-
-    def on_mount(self) -> None:
-        self.query_one("#new-file-input", Input).focus()
-
-    def on_input_submitted(self) -> None:
-        self.action_create()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "create":
-            self.action_create()
-        else:
-            self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_create(self) -> None:
-        filename = self.query_one("#new-file-input", Input).value.strip()
-        self.dismiss(filename if filename else None)
-
-
-class WeeklyReviewScreen(ModalScreen[dict[str, str] | None]):
-    FIELD_ORDER = [
-        ("page-summary", "weekly-summary", "Summary"),
-        ("page-highlights", "weekly-highlights", "Highlights"),
-        ("page-carry", "weekly-carry", "Carry-forwards"),
-    ]
-
-    CSS = """
-    WeeklyReviewScreen {
-        align: center middle;
-    }
-
-    #weekly-dialog {
-        width: 88;
-        height: 90%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #weekly-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
-        padding: 0;
-    }
-
-    #weekly-page-status {
-        height: auto;
-        color: $text-muted;
-        padding: 0 0 1 0;
-        border-bottom: solid $panel-darken-2;
-    }
-
-    #weekly-pages {
-        height: 1fr;
-        margin-top: 1;
-    }
-
-    .weekly-page {
-        height: 1fr;
-    }
-
-    .weekly-field-label {
-        height: auto;
-        padding: 1 0;
-        text-style: bold;
-        color: $text-muted;
-    }
-
-    .weekly-field {
-        height: 1fr;
-        border: round $secondary;
-    }
-
-    #weekly-buttons {
-        height: auto;
-        align-horizontal: right;
-    }
-
-    #weekly-footer {
-        height: auto;
-        padding-top: 1;
-    }
-
-    #weekly-help {
-        width: 1fr;
-        color: $text-muted;
-    }
-
-    .weekly-button {
-        width: 9;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=False),
-        Binding("ctrl+right", "next_field", "Next Field", show=False, priority=True),
-        Binding("ctrl+left", "previous_field", "Previous Field", show=False, priority=True),
-        Binding("ctrl+s", "save", "Save", show=False),
-    ]
-
-    def __init__(self, year: int, week: int, summary: str, highlights: str, carry_forwards: str) -> None:
-        super().__init__()
-        self.year = year
-        self.week = week
-        self.summary = summary
-        self.highlights = highlights
-        self.carry_forwards = carry_forwards
-        self.current_field_index = 0
-
-    def compose(self) -> ComposeResult:
-        label = week_label(self.year, self.week)
-        with Vertical(id="weekly-dialog"):
-            yield Label(f"Weekly Review — {label}", id="weekly-title")
-            yield Label("", id="weekly-page-status")
-            with ContentSwitcher(initial="page-summary", id="weekly-pages"):
-                with Vertical(id="page-summary", classes="weekly-page"):
-                    yield Label("Summary", classes="weekly-field-label")
-                    yield TextArea(
-                        self.summary,
-                        id="weekly-summary",
-                        classes="weekly-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-                with Vertical(id="page-highlights", classes="weekly-page"):
-                    yield Label("Highlights  (what shipped this week)", classes="weekly-field-label")
-                    yield TextArea(
-                        self.highlights,
-                        id="weekly-highlights",
-                        classes="weekly-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-                with Vertical(id="page-carry", classes="weekly-page"):
-                    yield Label("Carry-forwards  (open items into next week)", classes="weekly-field-label")
-                    yield TextArea(
-                        self.carry_forwards,
-                        id="weekly-carry",
-                        classes="weekly-field",
-                        soft_wrap=True,
-                        show_line_numbers=False,
-                    )
-            with Horizontal(id="weekly-footer"):
-                yield Label("Ctrl+Left/Right switch fields\nCtrl+S save\nEsc cancel", id="weekly-help")
-                with Horizontal(id="weekly-buttons"):
-                    yield Button("Skip", id="cancel", classes="weekly-button")
-                    yield Button("Save", id="save", variant="primary", classes="weekly-button")
-
-    def on_mount(self) -> None:
-        self.show_field(0)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "save":
-            self.action_save()
-        else:
-            self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_save(self) -> None:
-        self.dismiss({
-            "summary": self.query_one("#weekly-summary", TextArea).text,
-            "highlights": self.query_one("#weekly-highlights", TextArea).text,
-            "carry_forwards": self.query_one("#weekly-carry", TextArea).text,
-        })
-
-    def show_field(self, index: int) -> None:
-        self.current_field_index = index % len(self.FIELD_ORDER)
-        page_id, field_id, label = self.FIELD_ORDER[self.current_field_index]
-        self.query_one("#weekly-pages", ContentSwitcher).current = page_id
-        self.query_one("#weekly-page-status", Label).update(
-            f"{label} ({self.current_field_index + 1}/{len(self.FIELD_ORDER)})"
-        )
-        self.query_one(f"#{field_id}", TextArea).focus()
-
-    def action_next_field(self) -> None:
-        self.show_field(self.current_field_index + 1)
-
-    def action_previous_field(self) -> None:
-        self.show_field(self.current_field_index - 1)
-
-
-class LogPreview(MarkdownViewer):
-    can_focus = True
-
-    BINDINGS = [
-        Binding("left", "back_to_list", "List", show=False, priority=True),
-        Binding("right", "stay_in_preview", "Preview", show=False, priority=True),
-    ]
-
-    def action_back_to_list(self) -> None:
-        screen = self.screen
-        if isinstance(screen, LogBrowserScreen):
-            screen.action_back_to_list()
-
-    def action_stay_in_preview(self) -> None:
-        pass
-
-
-class LogBrowserScreen(ModalScreen[Path | None]):
-    TABS = ["sessions", "days", "weeks"]
-
-    CSS = """
-    LogBrowserScreen {
-        align: center middle;
-    }
-
-    #log-browser-dialog {
-        width: 95%;
-        height: 95%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #log-browser-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
-        padding: 0 0 1 0;
-    }
-
-    #log-body {
-        height: 1fr;
-        margin-top: 1;
-    }
-
-    #log-list-pane {
-        width: 30;
-        border-right: solid $panel;
-        padding-right: 1;
-    }
-
-    #log-list-pane.active-pane {
-        border-right: solid $accent;
-    }
-
-    #log-tab-status {
-        height: auto;
-        color: $text-muted;
-        padding: 0 0 1 0;
-    }
-
-    #log-tabs {
-        height: 1fr;
-    }
-
-    #log-preview {
-        height: 1fr;
-        overflow-x: hidden;
-    }
-
-    #log-preview-pane {
-        width: 1fr;
-        height: 1fr;
-        border-left: thick $surface;
-        padding-left: 1;
-    }
-
-    #log-preview-pane.active-pane {
-        border-left: thick $accent;
-    }
-
-    #log-preview-status {
-        height: auto;
-        color: $text-muted;
-        padding: 0 1;
-    }
-
-    #log-preview-pane.active-pane #log-preview-status {
-        background: $accent;
-        color: $surface;
-        text-style: bold;
-    }
-
-    #log-footer {
-        height: auto;
-        padding-top: 1;
-        color: $text-muted;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "handle_escape", "Close", show=False),
-        Binding("ctrl+right", "next_tab", "Next Tab", show=False, priority=True),
-        Binding("ctrl+left", "previous_tab", "Prev Tab", show=False, priority=True),
-        Binding("up", "nav_up", "Up", show=False, priority=True),
-        Binding("down", "nav_down", "Down", show=False, priority=True),
-        Binding("left", "back_to_list", "List", show=False, priority=True),
-        Binding("right", "focus_preview", "Preview", show=False, priority=True),
-        Binding("enter", "open_selected", "Open", show=False, priority=True),
-        Binding("e", "edit_selected", "Edit", show=False),
-    ]
-
-    def __init__(self, workspace: Workspace) -> None:
-        super().__init__()
-        self.workspace = workspace
-        self.tab_index = 0
-        self._focus_pane = "list"
-        self._preview_path: Path | None = None
-        self._files: dict[str, list[Path]] = {t: [] for t in self.TABS}
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="log-browser-dialog"):
-            yield Label("Log Browser", id="log-browser-title")
-            with Horizontal(id="log-body"):
-                with Vertical(id="log-list-pane", classes="active-pane"):
-                    yield Label("", id="log-tab-status")
-                    with ContentSwitcher(id="log-tabs", initial="tab-sessions"):
-                        yield ListView(id="tab-sessions")
-                        yield ListView(id="tab-days")
-                        yield ListView(id="tab-weeks")
-                with Vertical(id="log-preview-pane"):
-                    yield Label("Preview", id="log-preview-status")
-                    yield LogPreview(
-                        "Select an entry and press Enter to scroll.",
-                        show_table_of_contents=False,
-                        id="log-preview",
-                    )
-            yield Label("↑↓ navigate · Enter load · → preview · ← list · Ctrl+←/→ switch tabs · e edit · Esc close", id="log-footer")
-
-    def on_mount(self) -> None:
-        self._populate_all()
-        self._switch_tab(0)
-
-    def _format_stem(self, stem: str) -> str:
-        parts = stem.split("-")
-        if len(parts) == 4 and len(parts[3]) == 6 and parts[3].isdigit():
-            return f"{'-'.join(parts[:3])}  {parts[3][:2]}:{parts[3][2:4]}"
-        return stem
-
-    def _populate_all(self) -> None:
-        dirs = {
-            "sessions": self.workspace.sessions_dir,
-            "days": self.workspace.days_dir,
-            "weeks": self.workspace.weeks_dir,
-        }
-        for tab, directory in dirs.items():
-            lv = self.query_one(f"#tab-{tab}", ListView)
-            files = sorted(directory.glob("*.md"), reverse=True) if directory.exists() else []
-            self._files[tab] = files
-            if not files:
-                lv.append(ListItem(Label("No entries yet.")))
-            else:
-                for path in files:
-                    lv.append(ListItem(Label(self._format_stem(path.stem))))
-
-    def _switch_tab(self, index: int) -> None:
-        self.tab_index = index % len(self.TABS)
-        tab = self.TABS[self.tab_index]
-        self.query_one("#log-tabs", ContentSwitcher).current = f"tab-{tab}"
-        self._focus_pane = "list"
-        self._update_pane_styles()
-        list_view = self.query_one(f"#tab-{tab}", ListView)
-        if self._files[tab] and list_view.index is None:
-            list_view.index = 0
-        list_view.focus()
-
-    def _update_pane_styles(self) -> None:
-        in_preview = self._focus_pane == "preview"
-        self.query_one("#log-list-pane", Vertical).set_class(not in_preview, "active-pane")
-        self.query_one("#log-preview-pane", Vertical).set_class(in_preview, "active-pane")
-        tab = self.TABS[self.tab_index]
-        self.query_one("#log-tab-status", Label).update(f"{tab.capitalize()}  ({self.tab_index + 1}/{len(self.TABS)})")
-        self.query_one("#log-preview-status", Label).update("Preview")
-
-    async def _load_preview(self, path: Path) -> None:
-        text = preview_file(path)
-        if text.startswith("---\n"):
-            try:
-                _, _, body = text.split("---\n", 2)
-                text = body.lstrip()
-            except ValueError:
-                pass
-        preview = self.query_one("#log-preview", MarkdownViewer)
-        await preview.document.update(text)
-        preview.scroll_home(animate=False, immediate=True, force=True)
-
-    def action_nav_up(self) -> None:
-        if self._focus_pane == "preview":
-            self.query_one("#log-preview", MarkdownViewer).scroll_up()
-        else:
-            tab = self.TABS[self.tab_index]
-            self.query_one(f"#tab-{tab}", ListView).action_cursor_up()
-
-    def action_nav_down(self) -> None:
-        if self._focus_pane == "preview":
-            self.query_one("#log-preview", MarkdownViewer).scroll_down()
-        else:
-            tab = self.TABS[self.tab_index]
-            self.query_one(f"#tab-{tab}", ListView).action_cursor_down()
-
-    def _open_selected(self, list_view: ListView) -> None:
-        tab = self.TABS[self.tab_index]
-        index = list_view.index
-        if index is None or index >= len(self._files[tab]):
-            return
-        path = self._files[tab][index]
-        self._preview_path = path
-        self.run_worker(self._load_preview(path), exclusive=True)
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if self._focus_pane == "list":
-            self._open_selected(event.list_view)
-
-    def action_open_selected(self) -> None:
-        if self._focus_pane != "list":
-            return
-        tab = self.TABS[self.tab_index]
-        self._open_selected(self.query_one(f"#tab-{tab}", ListView))
-
-    def action_focus_preview(self) -> None:
-        if self._focus_pane != "list" or self._preview_path is None:
-            return
-        self._focus_pane = "preview"
-        self._update_pane_styles()
-        self.query_one("#log-preview", MarkdownViewer).focus()
-
-    def action_back_to_list(self) -> None:
-        if self._focus_pane != "preview":
-            return
-        self._focus_pane = "list"
-        tab = self.TABS[self.tab_index]
-        self.query_one("#log-preview", MarkdownViewer).scroll_home(
-            animate=False,
-            immediate=True,
-            force=True,
-            y_axis=False,
-        )
-        self._update_pane_styles()
-        self.query_one(f"#tab-{tab}", ListView).focus()
-
-    def action_handle_escape(self) -> None:
-        self.dismiss(None)
-
-    def action_next_tab(self) -> None:
-        self._switch_tab(self.tab_index + 1)
-
-    def action_previous_tab(self) -> None:
-        self._switch_tab(self.tab_index - 1)
-
-    def action_edit_selected(self) -> None:
-        tab = self.TABS[self.tab_index]
-        lv = self.query_one(f"#tab-{tab}", ListView)
-        index = lv.index
-        if index is None:
-            return
-        files = self._files[tab]
-        if index >= len(files):
-            return
-        self.dismiss(files[index])
-
-
-def strip_handoff_frontmatter(path: Path) -> None:
-    if not path.exists():
-        return
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith("---\n"):
-        return
-    try:
-        _, _frontmatter, body = text.split("---\n", 2)
-    except ValueError:
-        return
-    path.write_text(body.lstrip(), encoding="utf-8")
-
-
-def is_markdown_file(path: Path) -> bool:
-    return path.suffix.lower() in MARKDOWN_SUFFIXES
-
-
-def strip_first_heading(markdown: str) -> str:
-    lines = markdown.splitlines()
-    if lines and lines[0].startswith("# "):
-        return "\n".join(lines[1:]).lstrip()
-    return markdown
-
-
-def strip_first_subheading(markdown: str) -> str:
-    lines = markdown.splitlines()
-    if lines and lines[0].startswith("## "):
-        return "\n".join(lines[1:]).lstrip()
-    return markdown
-
-
-def render_last_markdown(fields: dict[str, str]) -> str:
-    parts = ["# Current Session Summary"]
-    parts.append("## Summary\n\n" + (fields["summary"].strip() or "Not recorded."))
-    parts.append("## Completed\n\n" + normalize_list_text(fields["done"]))
-    parts.append("## Open Issues\n\n" + normalize_list_text(fields["open"]))
-    if fields.get("evidence", "").strip():
-        parts.append("## Evidence\n\n```text\n" + fields["evidence"].strip() + "\n```")
-    return "\n\n".join(parts)
-
-
-def render_next_markdown(text: str) -> str:
-    return "# Next\n\n" + normalize_list_text(text)
-
-
-def normalize_list_text(text: str) -> str:
-    cleaned = text.strip()
-    if not cleaned:
-        return "- None"
-    lines = []
-    for line in cleaned.splitlines():
-        item = line.strip()
-        if not item:
-            continue
-        lines.append(item if item.startswith(("-", "*")) else f"- {item}")
-    return "\n".join(lines) or "- None"
-
-
-def strip_next_heading(markdown: str) -> str:
-    lines = markdown.splitlines()
-    if lines and lines[0].strip().lower() in {"# next", "## next.md"}:
-        return "\n".join(lines[1:]).lstrip()
-    return strip_first_heading(markdown)
-
-
-def deduplicate_next_lines(text: str) -> str:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for line in text.splitlines():
-        normalized = line.strip()
-        if not normalized:
-            if merged and merged[-1] != "":
-                merged.append("")
-            continue
-        key = normalized.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(line)
-    while merged and not merged[-1].strip():
-        merged.pop()
-    return "\n".join(merged)
-
-
-def merge_next_text(existing: str, incoming: str) -> str:
-    existing_body = strip_next_heading(existing).strip()
-    incoming_body = strip_next_heading(incoming).strip()
-    if not incoming_body:
-        return existing_body
-    if not existing_body or existing_body == "- Define the next action.":
-        return deduplicate_next_lines(incoming_body)
-
-    return deduplicate_next_lines(existing_body + "\n" + incoming_body)
-
-
 class WorkspaceShell(App):
     TITLE = "handoff"
 
@@ -843,11 +88,11 @@ class WorkspaceShell(App):
 
     #browser {
         width: 40;
-        border: solid $panel;
+        border: round $primary 35%;
     }
 
     #browser.focused-pane {
-        border: heavy $primary;
+        border: heavy $accent;
     }
 
     #right-pane {
@@ -879,7 +124,7 @@ class WorkspaceShell(App):
     #next-container {
         width: 1fr;
         height: 1fr;
-        border: round $warning;
+        border: round $warning 55%;
     }
 
     #next-container.focused-pane {
@@ -891,6 +136,7 @@ class WorkspaceShell(App):
         padding: 0 1;
         text-style: bold;
         color: $success;
+        background: $success 15%;
         border-bottom: solid $success;
     }
 
@@ -899,6 +145,7 @@ class WorkspaceShell(App):
         padding: 0 1;
         text-style: bold;
         color: $warning;
+        background: $warning 12%;
         border-bottom: solid $warning;
     }
 
@@ -924,17 +171,24 @@ class WorkspaceShell(App):
 
     #file-tree {
         height: 1fr;
+        background: $background;
+    }
+
+    #file-tree:focus {
+        background-tint: $foreground 0%;
     }
 
     #preview {
         height: 100%;
         border: round $secondary;
         padding: 1;
+        background: $background;
     }
 
     #text-preview {
         height: 100%;
         border: round $secondary;
+        background: $background;
     }
 
     #preview.focused-pane {
@@ -946,7 +200,7 @@ class WorkspaceShell(App):
     }
 
     DirectoryTree:focus {
-        border: heavy $primary;
+        border: heavy $accent;
     }
     """
 
@@ -968,14 +222,15 @@ class WorkspaceShell(App):
         Binding("5", "launch_tool(4)", "Tool 5", show=False),
         Binding("left", "focus_tree", "Files", show=False),
         Binding("right", "focus_preview", "Preview", show=False),
-        Binding("up", "move_up", "Up", show=False, priority=True),
-        Binding("down", "move_down", "Down", show=False, priority=True),
+        Binding("up", "move_up", "Up", show=False),
+        Binding("down", "move_down", "Down", show=False),
         Binding("pageup", "page_up", "Page Up", show=False),
         Binding("pagedown", "page_down", "Page Down", show=False),
         Binding("home", "scroll_home", "Home", show=False),
         Binding("end", "scroll_end", "End", show=False),
         Binding("enter", "select_focused", "Select", show=False),
         Binding("c", "new_file", "New File"),
+        Binding("d", "new_folder", "New Folder"),
     ]
 
     def __init__(self, config: AppConfig, workspace: Workspace) -> None:
@@ -1010,18 +265,22 @@ class WorkspaceShell(App):
                     with Vertical(id="preview-view"):
                         yield MarkdownViewer("", show_table_of_contents=False, id="preview")
                     with Vertical(id="text-preview-view"):
-                        yield TextArea("", read_only=True, show_cursor=False, show_line_numbers=False, id="text-preview")
+                        yield TextArea(
+                            "",
+                            read_only=True,
+                            show_cursor=False,
+                            show_line_numbers=False,
+                            id="text-preview",
+                        )
         yield Footer()
 
     def on_mount(self) -> None:
         ensure_themes_dir(self.config.themes_dir)
         register_all_themes(self, self.config)
         self.query_one("#file-tree", DirectoryTree).focus()
-        if workspace_type(self.workspace) is None:
-            ensure_workspace_files(self.workspace, workspace_kind=infer_workspace_type(self.workspace))
-        else:
-            ensure_workspace_files(self.workspace, workspace_kind=workspace_type(self.workspace) or "regular")
-        self.sub_title = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
+        kind = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
+        ensure_workspace_files(self.workspace, workspace_kind=kind)
+        self.sub_title = kind
         self.show_workspace_overview()
         self._check_pending_weeks()
 
@@ -1057,7 +316,8 @@ class WorkspaceShell(App):
             else "No session recorded yet.\n\nPress **h** after working to save your first handoff."
         )
         self.query_one("#right-switcher", ContentSwitcher).current = "overview-view"
-        self.query_one("#last-panel", Markdown).update(strip_first_subheading(strip_first_heading(latest_text)))
+        last_text = strip_first_subheading(strip_first_heading(latest_text))
+        self.query_one("#last-panel", Markdown).update(last_text)
         self.query_one("#next-panel", Markdown).update(strip_first_heading(next_text))
         self.tool_picker_open = False
         self.preview_mode = False
@@ -1119,27 +379,39 @@ class WorkspaceShell(App):
         return self.workspace.path
 
     def action_new_file(self) -> None:
+        self._show_new_entry_dialog("file")
+
+    def action_new_folder(self) -> None:
+        self._show_new_entry_dialog("folder")
+
+    def _show_new_entry_dialog(self, entry_kind: EntryKind) -> None:
         if self.focus_area != "files":
             return
         target_dir = self._get_cursor_directory()
 
-        def on_result(filename: str | None) -> None:
-            if not filename:
+        def on_result(name: str | None) -> None:
+            if not name:
                 return
-            new_path = target_dir / filename
+            if name in {".", ".."} or Path(name).name != name:
+                self.notify("Enter a name without path separators.", severity="warning")
+                return
+            new_path = target_dir / name
             if new_path.exists():
-                self.notify(f"{filename} already exists.", severity="warning")
+                self.notify(f"{name} already exists.", severity="warning")
                 return
             try:
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                new_path.touch()
+                if entry_kind == "folder":
+                    new_path.mkdir()
+                else:
+                    new_path.touch()
             except OSError as exc:
                 self.notify(str(exc), severity="error")
                 return
-            self.active_file = new_path
+            if entry_kind == "file":
+                self.active_file = new_path
             self.action_refresh()
 
-        self.push_screen(NewFileScreen(target_dir), on_result)
+        self.push_screen(NewEntryScreen(target_dir, entry_kind), on_result)
 
     def action_edit(self) -> None:
         if self.active_file is None:
@@ -1270,7 +542,10 @@ class WorkspaceShell(App):
         last_container = self.query_one("#last-container", Vertical)
         next_container = self.query_one("#next-container", Vertical)
         browser.set_class(self.focus_area == "files", "focused-pane")
-        markdown_preview.set_class(self.focus_area == "preview" and self.active_preview == "markdown", "focused-pane")
+        markdown_preview.set_class(
+            self.focus_area == "preview" and self.active_preview == "markdown",
+            "focused-pane",
+        )
         text_preview.set_class(self.focus_area == "preview" and self.active_preview == "text", "focused-pane")
         last_container.set_class(self.focus_area == "last", "focused-pane")
         next_container.set_class(self.focus_area == "next", "focused-pane")
@@ -1410,7 +685,13 @@ class WorkspaceShell(App):
         year, week = self.pending_weeks[0]
         fields = read_week_draft(self.workspace.weeks_dir, year, week)
         if fields is None:
-            auto_generate_draft(self.workspace.name, self.workspace.days_dir, self.workspace.weeks_dir, year, week)
+            auto_generate_draft(
+                self.workspace.name,
+                self.workspace.days_dir,
+                self.workspace.weeks_dir,
+                year,
+                week,
+            )
             fields = read_week_draft(self.workspace.weeks_dir, year, week) or ("", "", "")
         summary, highlights, carry_forwards = fields
         self.push_screen(
@@ -1457,7 +738,11 @@ class WorkspaceShell(App):
             if kind == "code"
             else ""
         )
-        next_template = preview_file(workspace.next_file, limit=3000) if workspace.next_file.exists() else "# Next\n\n- "
+        next_template = (
+            preview_file(workspace.next_file, limit=3000)
+            if workspace.next_file.exists()
+            else "# Next\n\n- "
+        )
         summary, done, open_items = "", "- ", "- "
         next_text = strip_first_heading(next_template)
         if workspace.draft_file.exists():
@@ -1477,44 +762,16 @@ class WorkspaceShell(App):
         if not any(result[key].strip() for key in ("summary", "done", "open", "next")):
             self.notify("Handoff empty; nothing saved.")
             return
+        if not result["summary"].strip():
+            self.notify("Summary is blank — saved with 'Not recorded'. Edit the session log to add one.", severity="warning", timeout=8)
         ended_at = now_local()
-        last = render_last_markdown(result)
-        next_text = render_next_markdown(result["next"])
-        session_name = session_filename(ended_at)
-        self.workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
-        session_path = self.workspace.sessions_dir / session_name
-        counter = 2
-        while session_path.exists():
-            session_name = session_filename(ended_at).removesuffix(".md") + f"-{counter}.md"
-            session_path = self.workspace.sessions_dir / session_name
-            counter += 1
-        session_path.write_text(
-            render_session_log(
-                workspace=self.workspace.name,
-                started_at=self.started_at,
-                ended_at=ended_at,
-                files_opened=self.files_opened,
-                tools_launched=self.tools_launched,
-                summary=result["summary"],
-                completed=result["done"],
-                open_issues=result["open"],
-                evidence=result.get("evidence", ""),
-            ),
-            encoding="utf-8",
-        )
-        update_day_log(
-            path=self.workspace.day_file(ended_at.date()),
-            workspace=self.workspace.name,
+        save_workspace_handoff(
+            workspace=self.workspace,
+            started_at=self.started_at,
             ended_at=ended_at,
-            session_file=session_name,
-            summary=result["summary"],
-            completed=result["done"],
-            open_issues=result["open"],
+            files_opened=self.files_opened,
+            tools_launched=self.tools_launched,
+            fields=result,
         )
-        self.workspace.last_file.write_text(last.rstrip() + "\n", encoding="utf-8")
-        if next_text.strip():
-            self.workspace.next_file.write_text(next_text.rstrip() + "\n", encoding="utf-8")
-        if self.workspace.draft_file.exists():
-            self.workspace.draft_file.unlink()
         self.notify("Saved handoff, session log, and day log")
         self.show_workspace_overview()
