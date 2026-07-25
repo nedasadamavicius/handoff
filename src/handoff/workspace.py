@@ -149,16 +149,17 @@ Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, 
 
 During the session, keep `.handoff/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
 
-- what was done
-- files or areas affected
-- a brief summary of important `git diff` details, when relevant
+- what was done and **why** it was done
+- only the files that matter — not a full `git diff` dump, just the relevant changed files and what changed in them
 - unresolved questions or blockers
 
 The Completed section must describe shipped changes, decisions, fixes, or artifacts created. Do not list agent process steps such as reading, re-reading, inspecting, reviewing, searching, opening files, or running tests. Mention only the concrete outcome those steps produced.
 
+**Keep it tight.** Each bullet should be one concise line. No walls of text. If a reader wouldn't need a piece of information to pick up where you left off, cut it. Err heavily on the side of brevity — document what's important and why, not every detail.
+
 Before handing control back to the user after material work, make sure `.handoff/DRAFT.md` reflects the latest completed work and evidence. Do this even if the user did not say the session is ending.
 
-Do not spend time expanding the NEXT.md section during ordinary progress updates. Fill or revise NEXT.md only when the agent session is ending or when the next action is already clear and durable.
+Do not spend time expanding the NEXT.md section during ordinary progress updates. Fill or revise NEXT.md only when the agent session is ending or when the next action is already clear and durable. When updating NEXT.md, actively remove any items that have already been completed — do not let stale tasks accumulate.
 
 Before ending any session, make sure `.handoff/DRAFT.md` uses this exact format:
 
