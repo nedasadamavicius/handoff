@@ -218,9 +218,10 @@ def workspace_files(workspace: Workspace) -> list[Path]:
     return sorted(files, key=lambda item: str(item.relative_to(workspace.path)).lower())
 
 
-def preview_file(path: Path, limit: int = 8000) -> str:
+def preview_file(path: Path, limit: int | None = None) -> str:
     if not path.exists():
         return "File does not exist."
-    if path.stat().st_size > limit:
-        return path.read_text(encoding="utf-8", errors="replace")[:limit] + "\n\n[preview truncated]"
-    return path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if limit is not None and len(text) > limit:
+        return text[:limit] + "\n\n[preview truncated]"
+    return text
