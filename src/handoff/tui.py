@@ -306,12 +306,12 @@ class WorkspaceShell(App):
         workspace = self.workspace
         latest = workspace.last_handoff()
         next_text = (
-            preview_file(workspace.next_file, limit=1500)
+            preview_file(workspace.next_file)
             if workspace.next_file.exists()
             else "No next actions yet.\n\nPress **n** to add some."
         )
         latest_text = (
-            latest.body[:2500]
+            latest.body
             if latest
             else "No session recorded yet.\n\nPress **h** after working to save your first handoff."
         )
