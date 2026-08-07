@@ -423,7 +423,7 @@ class WorkspaceShell(App):
         command = editor_command(self.config, path)
         try:
             with self.suspend():
-                run_command(command, cwd=self.workspace.path, shell=True)
+                run_command(command, cwd=self.workspace.path)
         except LaunchError as exc:
             self.notify(str(exc), severity="error")
             return
