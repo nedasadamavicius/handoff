@@ -52,7 +52,9 @@ handoff
 
 The overview shows what happened last session and what to do next, without needing a long session history.
 
-The default tool launcher includes `codex` and `claude`. They must be installed and available on `PATH` before launching them from the TUI.
+The default tool launcher includes `grok`, `codex`, and `claude`. They must be installed, logged in, and available on `PATH` before launching them from the TUI. Handoff runs providers inside its own agent tabs over stdio; it does not embed their native terminal UI or call provider HTTP APIs.
+
+Existing user configuration with the old default `{codex, claude}` is migrated by adding `grok`; custom tool maps are kept as configured.
 
 User-level preferences live under `~/.handoff/`:
 
@@ -67,7 +69,11 @@ Workspace state lives under the active directory's `.handoff/` folder.
 
 ## Product shape
 
+See [DESIGN.md](DESIGN.md) for the ACP harness and dual-mode direction.
+
 `handoff` opens a terminal UI for the current directory, previewing files, launching configured editors/tools, and saving handoff summaries.
+
+The product has two modes on one stable handoff spine: a dev mode for a code repository (the current ACP multi-agent harness) and a regular/study mode for notes. The local wiki-link graph is a later study feature; graph support is not part of this validation build.
 
 Workspace metadata lives in readable files inside the current directory:
 
@@ -82,7 +88,7 @@ The Python implementation is a validation build. File formats and the `handoff` 
 
 ## Agent handoff integration
 
-When you open a configured agent tool from `handoff`, such as `claude` or `codex`, `handoff` generates that tool's memory file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, etc.) in the workspace root. These files are not created when the app itself opens. The file instructs the agent to:
+When you open a configured agent tool from `handoff`, such as `grok`, `claude`, or `codex`, `handoff` opens an agent tab in the right pane and generates that tool's memory file (`AGENTS.md` or `CLAUDE.md`) in the workspace root. These files are not created when the app itself opens. The file instructs the agent to:
 
 1. Read `.handoff/WORKSPACE.md` at session start to understand the workspace context.
 2. Treat `.handoff/DRAFT.md` as a live handoff ledger and keep the LAST.md section current after material work, including affected files and relevant `git diff` details.
@@ -90,19 +96,30 @@ When you open a configured agent tool from `handoff`, such as `claude` or `codex
 
 Agents are also instructed to refresh `.handoff/DRAFT.md` before handing control back after material work, even if you did not say the session is ending.
 
-When you press `h` to open the handoff modal, `handoff` checks for `.handoff/DRAFT.md` and pre-populates the fields from the agent's draft. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove it in the modal. You review, edit if needed, and save. The draft is deleted after saving.
-
-After a Codex tool session exits, `handoff` asks the most recent Codex session to refresh `.handoff/DRAFT.md` before opening the handoff modal by running `codex exec resume --last` with a focused draft-finalization prompt.
+When you press `h` to open the handoff modal, `handoff` snapshots active agent drafts and pre-populates the fields from the current draft plus run snapshots. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove it in the modal. You review, edit if needed, and save. The draft is deleted after saving.
 
 The tool file is only created if it does not already exist, so your edits are never overwritten.
 
-**Supported tools** (matched by configured tool name or command):
+### Providers and setup
+
+The Grok adapter starts `grok agent stdio`. Codex uses a native ACP executable when configured, or the `@agentclientprotocol/codex-acp` npm package through `npx`; configure the adapter and complete `codex login` first. Claude prefers a `claude-agent-acp` or `claude-code-acp` executable. If neither is installed, it falls back to `claude -p --output-format stream-json --verbose --include-partial-messages`; later turns use `--resume`. This fallback is CLI-controlled: permission denials are reported by Claude, and it does not provide Handoff's ACP permission modal.
+
+Unknown configured commands are unsupported and missing provider binaries are reported in the agent tab. Provider compatibility depends on the installed CLI/adapter and login state; this documentation does not promise live-provider compatibility testing.
+
+### Agent tabs and shortcuts
+
+Use `t` to show the agent board and `1`–`5` to open or focus configured agent tabs. Each tab has a transcript, prompt field, status, permission controls where ACP supports them, and Send/Cancel/Close controls. Closing a tab or pressing `h` snapshots its draft under `.handoff/runs/`; `h` is the human handoff workflow, not an automatic modal after every agent turn. Press `q` to quit; when a draft or live run is pending, choose Save handoff, Quit without saving, or Cancel.
+
+While an agent prompt field is focused, typing remains in the prompt editor. The global prompt-safe shortcuts `Ctrl+h`, `Ctrl+q`, and `Ctrl+s` still open handoff, quit, and logs. Existing editor shortcuts and `$EDITOR` behavior remain available. `s` opens logs, `e` edits the selected file, and `h` saves the handoff.
+
+**Agent memory files** (matched by configured tool name or command):
 
 | Tool | File created |
 |---|---|
+| grok | `AGENTS.md` |
 | claude | `CLAUDE.md` |
 | codex | `AGENTS.md` |
-| gemini | `GEMINI.md` |
+| gemini (legacy memory-file support; no agent tab) | `GEMINI.md` |
 
 The matching memory file is created only for the tool being opened, just before it starts.
 

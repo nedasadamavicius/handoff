@@ -186,10 +186,16 @@ One or two sentences describing what was accomplished.
 
 
 def _memory_filename(tool_name: str, command: str) -> str | None:
-    combined = (tool_name + " " + command).lower()
-    for key, filename in TOOL_MEMORY_FILES.items():
-        if key in combined:
-            return filename
+    import shlex
+    parts = shlex.split(command, posix=False)
+    names = {tool_name.lower()}
+    if parts:
+        names.add(Path(parts[0].strip('"')).name.lower())
+    aliases = {"openai": "codex", "xai": "grok"}
+    for name in names:
+        key = aliases.get(name, name)
+        if key in TOOL_MEMORY_FILES:
+            return TOOL_MEMORY_FILES[key]
     return None
 
 

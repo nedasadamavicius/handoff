@@ -9,6 +9,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import ContentSwitcher, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
 
 from handoff.config import AppConfig
+from handoff.agent_runs import RunLedger
+from handoff.tui_agents import AgentBoard, QuitAgentScreen
 from handoff.documents import (
     MARKDOWN_SUFFIXES,
     deduplicate_next_lines,
@@ -26,11 +28,8 @@ from handoff.documents import (
 from handoff.git import changed_files_from_status, git_status_short
 from handoff.launcher import (
     LaunchError,
-    claude_finalize_command,
-    codex_finalize_command,
     editor_command,
     run_command,
-    tool_command,
 )
 from handoff.handoff import parse_draft_or_files, parse_last_sections
 from handoff.session import now_local
@@ -108,6 +107,10 @@ class WorkspaceShell(App):
     }
 
     #preview-view {
+        height: 1fr;
+    }
+
+    #agents-view {
         height: 1fr;
     }
 
@@ -213,8 +216,12 @@ class WorkspaceShell(App):
         Binding("l", "edit_last", "Edit Last"),
         Binding("n", "edit_next", "Edit Next"),
         Binding("t", "tool", "Tool"),
+        Binding("ctrl+t", "tool", "Tool", show=False, priority=True),
         Binding("W", "weekly_review", "Week Review"),
         Binding("s", "log_browser", "Logs"),
+        Binding("ctrl+h", "handoff", "Handoff", show=False, priority=True),
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+s", "handoff", "Handoff", show=False, priority=True),
         Binding("1", "launch_tool(0)", "Tool 1", show=False),
         Binding("2", "launch_tool(1)", "Tool 2", show=False),
         Binding("3", "launch_tool(2)", "Tool 3", show=False),
@@ -246,6 +253,9 @@ class WorkspaceShell(App):
         self.focus_area = "files"
         self.active_preview = "markdown"
         self.pending_weeks: list[tuple[int, int]] = []
+        self.run_ledger = RunLedger(workspace)
+        self.agent_board: AgentBoard | None = None
+        self.quit_after_handoff = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="root"):
@@ -272,6 +282,9 @@ class WorkspaceShell(App):
                             show_line_numbers=False,
                             id="text-preview",
                         )
+                    with Vertical(id="agents-view"):
+                        self.agent_board = AgentBoard(self.config, self.workspace, self.run_ledger)
+                        yield self.agent_board
         yield Footer()
 
     def on_mount(self) -> None:
@@ -297,6 +310,8 @@ class WorkspaceShell(App):
             "select_focused",
         }
         if action in nav_actions and len(self.screen_stack) > 1:
+            return False
+        if action == "handoff" and len(self.screen_stack) > 1:
             return False
         if isinstance(self.focused, TextArea) and action in nav_actions:
             return False
@@ -440,55 +455,24 @@ class WorkspaceShell(App):
         self.edit_path(self.workspace.next_file)
 
     def action_tool(self) -> None:
-        if not self.config.tools:
-            self.notify("No tools configured.", severity="warning")
-            return
-        lines = [
-            "# Tool Launcher",
-            "",
-            "Press a number to launch a tool in the active workspace.",
-            "",
-        ]
-        for index, (name, command) in enumerate(self.config.tools.items(), start=1):
-            if index > 5:
-                break
-            lines.append(f"{index}. **{name}** - `{command}`")
-        lines.extend(
-            [
-                "",
-                f"Workspace: `{self.workspace.name}`",
-                "",
-                "Press `r` to return to the workspace overview.",
-            ]
-        )
-        self.show_single_panel("\n".join(lines))
-        self.tool_picker_open = True
+        self.query_one("#right-switcher", ContentSwitcher).current = "agents-view"
+        self.tool_picker_open = False
+        self.preview_mode = False
+        if self.agent_board is not None:
+            self.agent_board.show_launcher()
 
-    def action_launch_tool(self, index: int) -> None:
-        if not self.tool_picker_open:
-            return
+    async def action_launch_tool(self, index: int) -> None:
         tools = list(self.config.tools)
         if index >= len(tools):
             return
         name = tools[index]
-        command = tool_command(self.config, name)
-        self.tools_launched.append(name)
-        try:
-            ensure_tool_file(self.workspace, name, command)
-            with self.suspend():
-                run_command(command, cwd=self.workspace.path, shell=True)
-                for finalizer in (
-                    codex_finalize_command(name, command),
-                    claude_finalize_command(name, command),
-                ):
-                    if finalizer is not None:
-                        run_command(finalizer, cwd=self.workspace.path, shell=True)
-        except LaunchError as exc:
-            self.tools_launched.pop()
-            self.notify(str(exc), severity="error")
-            return
+        command = self.config.tools[name]
+        ensure_tool_file(self.workspace, name, command)
+        self.query_one("#right-switcher", ContentSwitcher).current = "agents-view"
         self.tool_picker_open = False
-        self.action_handoff()
+        self.preview_mode = False
+        if self.agent_board is not None:
+            await self.agent_board.new_session(name)
 
     def action_move_up(self) -> None:
         if isinstance(self.focused, TextArea):
@@ -727,7 +711,9 @@ class WorkspaceShell(App):
 
     def action_handoff(self) -> None:
         workspace = self.workspace
-        tools = self.tools_launched
+        if self.agent_board is not None:
+            self.agent_board.snapshot_active()
+        tools = [*self.tools_launched, *self.run_ledger.tools_launched]
         kind = workspace_type(workspace) or "regular"
         git_status = git_status_short(workspace.path) if kind == "code" else ""
         changed_files = changed_files_from_status(git_status)
@@ -743,13 +729,9 @@ class WorkspaceShell(App):
             if workspace.next_file.exists()
             else "# Next\n\n- "
         )
-        summary, done, open_items = "", "- ", "- "
-        next_text = strip_first_heading(next_template)
-        if workspace.draft_file.exists():
-            draft = parse_draft_or_files(workspace.draft_file.read_text(encoding="utf-8"), next_template)
-            summary, done, open_items = parse_last_sections(draft.last)
-            if draft.next.strip():
-                next_text = merge_next_text(next_template, draft.next)
+        draft = self.run_ledger.merged_draft(next_template)
+        summary, done, open_items = parse_last_sections(draft.last)
+        next_text = draft.next
         self.push_screen(
             HandoffScreen(workspace.name, summary, done, open_items, next_text, evidence),
             self.save_handoff,
@@ -770,8 +752,32 @@ class WorkspaceShell(App):
             started_at=self.started_at,
             ended_at=ended_at,
             files_opened=self.files_opened,
-            tools_launched=self.tools_launched,
+            tools_launched=[*self.tools_launched, *self.run_ledger.tools_launched],
             fields=result,
         )
+        self.run_ledger.consume()
         self.notify("Saved handoff, session log, and day log")
         self.show_workspace_overview()
+        if self.quit_after_handoff:
+            self.quit_after_handoff = False
+            self.run_worker(self._shutdown_and_exit(), exclusive=False)
+
+    def action_quit(self) -> None:
+        pending = self.workspace.draft_file.exists() or self.run_ledger.has_pending
+        pending = pending or bool(self.agent_board and self.agent_board.has_live_runs)
+        if not pending:
+            self.run_worker(self._shutdown_and_exit(), exclusive=False)
+            return
+        self.push_screen(QuitAgentScreen(), self._finish_quit_choice)
+
+    def _finish_quit_choice(self, choice: str) -> None:
+        if choice == "handoff":
+            self.quit_after_handoff = True
+            self.action_handoff()
+        elif choice == "discard":
+            self.run_worker(self._shutdown_and_exit(), exclusive=False)
+
+    async def _shutdown_and_exit(self) -> None:
+        if self.agent_board is not None:
+            await self.agent_board.shutdown()
+        self.exit()

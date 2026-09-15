@@ -28,7 +28,7 @@ class EditorConfig:
 class AppConfig:
     root: Path = DEFAULT_ROOT
     editor: EditorConfig = field(default_factory=EditorConfig)
-    tools: dict[str, str] = field(default_factory=lambda: {"codex": "codex", "claude": "claude"})
+    tools: dict[str, str] = field(default_factory=lambda: {"grok": "grok", "codex": "codex", "claude": "claude"})
     ai_command: str | None = None
     theme: str = "graphite-crimson"
 
@@ -53,7 +53,7 @@ def default_config_data(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
             "default": editor.default,
             "options": editor.options,
         },
-        "tools": {"codex": "codex", "claude": "claude"},
+        "tools": {"grok": "grok", "codex": "codex", "claude": "claude"},
         "ai_command": None,
         "theme": "graphite-crimson",
     }
@@ -81,9 +81,12 @@ def load_config(root: Path = DEFAULT_ROOT) -> AppConfig:
         default=editor_raw.get("default") or editor_defaults.default,
         options=dict(editor_raw.get("options") or editor_defaults.options),
     )
+    raw_tools = dict(raw.get("tools") or AppConfig().tools)
+    if raw_tools == {"codex": "codex", "claude": "claude"}:
+        raw_tools = {"grok": "grok", **raw_tools}
     tools = {
         name: command
-        for name, command in dict(raw.get("tools") or AppConfig().tools).items()
+        for name, command in raw_tools.items()
         if name.lower() not in REMOVED_DEFAULT_TOOLS
     }
     return AppConfig(

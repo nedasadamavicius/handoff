@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -86,8 +87,13 @@ def claude_finalize_command(tool_name: str, command: str) -> str | None:
 
 
 def run_command(command: list[str] | str, cwd: Path, *, shell: bool = False) -> int:
+    resolved_command = command
+    if isinstance(command, list) and command:
+        executable = shutil.which(command[0])
+        if executable is not None:
+            resolved_command = [executable, *command[1:]]
     try:
-        return subprocess.call(command, cwd=str(cwd), shell=shell)
+        return subprocess.call(resolved_command, cwd=str(cwd), shell=shell)
     except FileNotFoundError as exc:
         executable = command[0] if isinstance(command, list) and command else str(command)
         raise LaunchError(f"Could not find executable: {executable}") from exc

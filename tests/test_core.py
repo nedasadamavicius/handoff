@@ -40,7 +40,7 @@ def test_default_config_uses_in_code_defaults() -> None:
     config = AppConfig()
 
     assert config.editor.default in config.editor.options
-    assert config.tools == {"codex": "codex", "claude": "claude"}
+    assert config.tools == {"grok": "grok", "codex": "codex", "claude": "claude"}
 
 
 def test_config_creation_uses_handoff_root(tmp_path: Path) -> None:
@@ -115,7 +115,7 @@ def test_codex_tool_creates_agents_memory_file(tmp_path: Path) -> None:
     assert "Read `.handoff/WORKSPACE.md`" in text
     assert "Treat it as the live handoff ledger" in text
     assert "Before handing control back to the user after material work" in text
-    assert "brief summary of important `git diff` details" in text
+    assert "only the files that matter" in text
     assert "Do not list agent process steps" in text
     assert "running tests" in text
     assert "Do not spend time expanding the NEXT.md section" in text
@@ -167,6 +167,19 @@ def test_missing_executable_is_launch_error(tmp_path: Path) -> None:
         assert "Could not find executable" in str(exc)
     else:
         raise AssertionError("Expected LaunchError")
+
+
+def test_run_command_resolves_windows_command_wrapper(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[list[str], str, bool]] = []
+    wrapper = r"C:\Program Files\Microsoft VS Code\bin\code.cmd"
+    monkeypatch.setattr("handoff.launcher.shutil.which", lambda executable: wrapper)
+    monkeypatch.setattr(
+        "handoff.launcher.subprocess.call",
+        lambda command, cwd, shell: calls.append((command, cwd, shell)) or 0,
+    )
+
+    assert run_command(["code", "--wait", "notes.md"], cwd=tmp_path) == 0
+    assert calls == [([wrapper, "--wait", "notes.md"], str(tmp_path), False)]
 
 
 def test_codex_finalize_command_uses_exec_resume_last() -> None:
@@ -302,6 +315,27 @@ def test_handoff_fields_support_standard_selection_and_clipboard_shortcuts() -> 
     }
     assert not arrow_bindings["up"].priority
     assert not arrow_bindings["down"].priority
+
+
+def test_ctrl_s_saves_open_handoff_instead_of_stacking_modal(tmp_path: Path) -> None:
+    workspace = current_directory_workspace(tmp_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    async def exercise_handoff() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.press("h")
+            await pilot.pause()
+            assert isinstance(app.screen, HandoffScreen)
+            assert len(app.screen_stack) == 2
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+
+            assert not isinstance(app.screen, HandoffScreen)
+            assert len(app.screen_stack) == 1
+            assert workspace.last_file.exists()
+
+    asyncio.run(exercise_handoff())
 
 
 def test_new_folder_action_creates_folder_in_workspace(tmp_path: Path) -> None:
