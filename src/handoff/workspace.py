@@ -10,6 +10,7 @@ from handoff.session import SessionFile, read_handoff
 
 
 WORKSPACE_TYPES = {"code", "regular"}
+WORKSPACE_MODES = {"study", "coding"}
 
 
 @dataclass(frozen=True)
@@ -75,41 +76,57 @@ def current_directory_workspace(path: Path) -> Workspace:
     )
 
 
-def initialize_directory_workspace(path: Path) -> Workspace:
+def initialize_directory_workspace(path: Path, workspace_mode_value: str | None = "coding") -> Workspace:
     target = path.expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
     workspace = current_directory_workspace(target)
-    ensure_workspace_files(workspace, workspace_kind=infer_workspace_type(workspace))
+    ensure_workspace_files(
+        workspace, workspace_kind=infer_workspace_type(workspace), workspace_mode=workspace_mode_value
+    )
     return workspace
 
 
-def ensure_workspace_files(workspace: Workspace, workspace_kind: str = "regular") -> None:
+def ensure_workspace_files(
+    workspace: Workspace, workspace_kind: str = "regular", workspace_mode: str | None = None
+) -> None:
     if workspace_kind not in WORKSPACE_TYPES:
         workspace_kind = "regular"
     workspace.meta.mkdir(parents=True, exist_ok=True)
     if not workspace.workspace_file.exists():
-        workspace.workspace_file.write_text(render_workspace_file(workspace, workspace_kind), encoding="utf-8")
+        workspace.workspace_file.write_text(
+            render_workspace_file(workspace, workspace_kind, workspace_mode), encoding="utf-8"
+        )
     elif workspace_type(workspace) is None:
         existing = workspace.workspace_file.read_text(encoding="utf-8")
         workspace.workspace_file.write_text(render_workspace_header(workspace_kind) + existing, encoding="utf-8")
+    if workspace_mode in WORKSPACE_MODES and workspace_mode_fn(workspace) is None:
+        set_workspace_mode(workspace, workspace_mode)
     if not workspace.last_file.exists():
         workspace.last_file.write_text("# Last Session\n\nNo previous session recorded.\n", encoding="utf-8")
     if not workspace.next_file.exists():
         workspace.next_file.write_text("# Next\n\n- Define the next action.\n", encoding="utf-8")
+    if not workspace.draft_file.exists():
+        workspace.draft_file.write_text(
+            "## LAST.md\n\n### Summary\n\n### Completed\n\n### Open Issues\n\n## NEXT.md\n\n",
+            encoding="utf-8",
+        )
 
 
-def render_workspace_file(workspace: Workspace, workspace_type: str) -> str:
+def render_workspace_file(workspace: Workspace, workspace_type: str, workspace_mode: str | None = None) -> str:
     description = (
         "Code repository workspace. Handoff templates may include development evidence such as tools launched, "
         "files opened, and git status."
         if workspace_type == "code"
         else "Regular workspace for notes, learning, content, or general files."
     )
-    return render_workspace_header(workspace_type) + f"# {workspace.name}\n\n{description}\n"
+    return render_workspace_header(workspace_type, workspace_mode) + f"# {workspace.name}\n\n{description}\n"
 
 
-def render_workspace_header(workspace_type: str) -> str:
-    frontmatter = yaml.safe_dump({"workspace_type": workspace_type}, sort_keys=False).strip()
+def render_workspace_header(workspace_type: str, workspace_mode: str | None = None) -> str:
+    data = {"workspace_type": workspace_type}
+    if workspace_mode in WORKSPACE_MODES:
+        data["workspace_mode"] = workspace_mode
+    frontmatter = yaml.safe_dump(data, sort_keys=False).strip()
     return (
         f"---\n{frontmatter}\n---\n\n"
         "<!-- handoff uses the workspace_type front matter to choose handoff templates. "
@@ -132,6 +149,44 @@ def workspace_type(workspace: Workspace) -> str | None:
     return value if value in WORKSPACE_TYPES else None
 
 
+def workspace_mode(workspace: Workspace) -> str | None:
+    if not workspace.workspace_file.exists():
+        return None
+    text = workspace.workspace_file.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return None
+    try:
+        _, frontmatter, _ = text.split("---\n", 2)
+        value = (yaml.safe_load(frontmatter) or {}).get("workspace_mode")
+    except (ValueError, yaml.YAMLError):
+        return None
+    return value if value in WORKSPACE_MODES else None
+
+
+# Internal alias keeps the ``workspace_mode`` parameter name readable above.
+workspace_mode_fn = workspace_mode
+
+
+def set_workspace_mode(workspace: Workspace, mode: str) -> None:
+    if mode not in WORKSPACE_MODES:
+        raise ValueError(f"Unknown workspace mode: {mode}")
+    text = workspace.workspace_file.read_text(encoding="utf-8") if workspace.workspace_file.exists() else ""
+    if text.startswith("---\n"):
+        try:
+            _, frontmatter, body = text.split("---\n", 2)
+            data = yaml.safe_load(frontmatter) or {}
+        except (ValueError, yaml.YAMLError):
+            data = {"workspace_type": infer_workspace_type(workspace)}
+            body = text
+    else:
+        data = {"workspace_type": workspace_type(workspace) or infer_workspace_type(workspace)}
+        body = text
+    data["workspace_mode"] = mode
+    workspace.workspace_file.write_text(
+        f"---\n{yaml.safe_dump(data, sort_keys=False).strip()}\n---\n\n{body.lstrip()}", encoding="utf-8"
+    )
+
+
 def infer_workspace_type(workspace: Workspace) -> str:
     return "code" if (workspace.path / ".git").is_dir() else "regular"
 
@@ -146,6 +201,10 @@ TOOL_MEMORY_FILES: dict[str, str] = {
 
 _TOOL_MEMORY_TEMPLATE = """\
 Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
+
+## Git
+
+Use conventional commit messages (`type(scope): description`). Use only ASCII characters in commit messages. Never add a `Co-Authored-By` trailer to commits.
 
 During the session, keep `.handoff/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
 
