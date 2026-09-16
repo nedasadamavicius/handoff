@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import ContentSwitcher, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
+from textual.widgets import ContentSwitcher, DataTable, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
 
 from handoff.config import AppConfig
 from handoff.agent_runs import RunLedger
-from handoff.tui_agents import AgentBoard, QuitAgentScreen
+from handoff.tui_agents import QuitAgentScreen
+from handoff.external_sessions import SessionManager
+from handoff.tui_sessions import SessionManagerWidget
 from handoff.documents import (
     MARKDOWN_SUFFIXES,
     deduplicate_next_lines,
@@ -36,7 +39,7 @@ from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
 from handoff.tui_forms import EditableInput, EditableTextArea
 from handoff.tui_logs import LogBrowserScreen, LogPreview
-from handoff.tui_screens import EntryKind, HandoffScreen, NewEntryScreen, WeeklyReviewScreen
+from handoff.tui_screens import EntryKind, HandoffScreen, KnowledgeScreen, NewEntryScreen, WeeklyReviewScreen, WorkspaceModeScreen
 from handoff.weekly import (
     append_week_to_worklog,
     auto_generate_draft,
@@ -52,7 +55,9 @@ from handoff.workspace import (
     ensure_workspace_files,
     infer_workspace_type,
     preview_file,
+    set_workspace_mode,
     workspace_type,
+    workspace_mode,
 )
 
 
@@ -216,9 +221,11 @@ class WorkspaceShell(App):
         Binding("l", "edit_last", "Edit Last"),
         Binding("n", "edit_next", "Edit Next"),
         Binding("t", "tool", "Tool"),
-        Binding("ctrl+t", "tool", "Tool", show=False, priority=True),
+        Binding("ctrl+t", "detach_tool", "Detach Tool", show=False, priority=True),
+        Binding("ctrl+k", "kill_tool", "Kill Tool", show=False, priority=True),
         Binding("W", "weekly_review", "Week Review"),
         Binding("s", "log_browser", "Logs"),
+        Binding("g", "knowledge", "Knowledge"),
         Binding("ctrl+h", "handoff", "Handoff", show=False, priority=True),
         Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
         Binding("ctrl+s", "handoff", "Handoff", show=False, priority=True),
@@ -254,7 +261,8 @@ class WorkspaceShell(App):
         self.active_preview = "markdown"
         self.pending_weeks: list[tuple[int, int]] = []
         self.run_ledger = RunLedger(workspace)
-        self.agent_board: AgentBoard | None = None
+        self.session_manager = SessionManager(self.workspace.path)
+        self.session_widget: SessionManagerWidget | None = None
         self.quit_after_handoff = False
 
     def compose(self) -> ComposeResult:
@@ -283,19 +291,32 @@ class WorkspaceShell(App):
                             id="text-preview",
                         )
                     with Vertical(id="agents-view"):
-                        self.agent_board = AgentBoard(self.config, self.workspace, self.run_ledger)
-                        yield self.agent_board
+                        self.session_widget = SessionManagerWidget(self.session_manager, self.config, self.workspace.path, ledger=self.run_ledger)
+                        yield self.session_widget
         yield Footer()
 
     def on_mount(self) -> None:
         ensure_themes_dir(self.config.themes_dir)
         register_all_themes(self, self.config)
         self.query_one("#file-tree", DirectoryTree).focus()
+        had_workspace_file = self.workspace.workspace_file.exists()
         kind = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
-        ensure_workspace_files(self.workspace, workspace_kind=kind)
-        self.sub_title = kind
+        ensure_workspace_files(self.workspace, workspace_kind=kind, workspace_mode=None if had_workspace_file else "coding")
+        mode = workspace_mode(self.workspace)
+        self.sub_title = mode or kind
         self.show_workspace_overview()
         self._check_pending_weeks()
+        if mode is None and had_workspace_file:
+            self.push_screen(WorkspaceModeScreen(), self._save_workspace_mode)
+
+    def _save_workspace_mode(self, mode: str | None) -> None:
+        if mode is None:
+            self.notify("Choose Study or Coding to continue.", severity="warning")
+            self.push_screen(WorkspaceModeScreen(), self._save_workspace_mode)
+            return
+        set_workspace_mode(self.workspace, mode)
+        self.sub_title = mode
+        self.notify("Study tools enabled." if mode == "study" else "Coding workspace ready.")
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         nav_actions = {
@@ -309,6 +330,8 @@ class WorkspaceShell(App):
             "scroll_end",
             "select_focused",
         }
+        if isinstance(self.focused, DataTable) and action in nav_actions:
+            return False
         if action in nav_actions and len(self.screen_stack) > 1:
             return False
         if action == "handoff" and len(self.screen_stack) > 1:
@@ -458,21 +481,29 @@ class WorkspaceShell(App):
         self.query_one("#right-switcher", ContentSwitcher).current = "agents-view"
         self.tool_picker_open = False
         self.preview_mode = False
-        if self.agent_board is not None:
-            self.agent_board.show_launcher()
+        if self.session_widget is not None:
+            self.call_after_refresh(self.session_widget.query_one(DataTable).focus)
 
-    async def action_launch_tool(self, index: int) -> None:
+    def action_detach_tool(self) -> None:
+        """Return to the workspace while leaving the terminal process running."""
+        self.show_workspace_overview()
+
+    def action_kill_tool(self) -> None:
+        """Stop the active terminal process, if any."""
+        if self.session_widget is not None and self.query_one("#right-switcher", ContentSwitcher).current == "agents-view":
+            self.session_widget.stop_selected()
+
+    def action_launch_tool(self, index: int) -> None:
         tools = list(self.config.tools)
         if index >= len(tools):
             return
         name = tools[index]
         command = self.config.tools[name]
         ensure_tool_file(self.workspace, name, command)
-        self.query_one("#right-switcher", ContentSwitcher).current = "agents-view"
-        self.tool_picker_open = False
-        self.preview_mode = False
-        if self.agent_board is not None:
-            await self.agent_board.new_session(name)
+        self.action_tool()
+        if self.session_widget is None:
+            return
+        self.session_widget.launch_background(name)
 
     def action_move_up(self) -> None:
         if isinstance(self.focused, TextArea):
@@ -709,10 +740,14 @@ class WorkspaceShell(App):
                 self.edit_path(path)
         self.push_screen(LogBrowserScreen(self.workspace), on_result)
 
+    def action_knowledge(self) -> None:
+        if workspace_mode(self.workspace) != "study":
+            self.notify("Knowledge lookup is available in Study workspaces.", severity="information")
+            return
+        self.push_screen(KnowledgeScreen(self.workspace.path, self.active_file if self.active_file and is_markdown_file(self.active_file) else None))
+
     def action_handoff(self) -> None:
         workspace = self.workspace
-        if self.agent_board is not None:
-            self.agent_board.snapshot_active()
         tools = [*self.tools_launched, *self.run_ledger.tools_launched]
         kind = workspace_type(workspace) or "regular"
         git_status = git_status_short(workspace.path) if kind == "code" else ""
@@ -764,7 +799,7 @@ class WorkspaceShell(App):
 
     def action_quit(self) -> None:
         pending = self.workspace.draft_file.exists() or self.run_ledger.has_pending
-        pending = pending or bool(self.agent_board and self.agent_board.has_live_runs)
+        pending = pending or any(s.state in {"starting", "running"} for s in self.session_manager.sessions)
         if not pending:
             self.run_worker(self._shutdown_and_exit(), exclusive=False)
             return
@@ -778,6 +813,8 @@ class WorkspaceShell(App):
             self.run_worker(self._shutdown_and_exit(), exclusive=False)
 
     async def _shutdown_and_exit(self) -> None:
-        if self.agent_board is not None:
-            await self.agent_board.shutdown()
+        if self.session_widget is not None:
+            await self.session_widget.shutdown_async()
+        else:
+            await asyncio.to_thread(self.session_manager.shutdown)
         self.exit()
