@@ -51,7 +51,13 @@ class ClaudeStreamClient:
                     result = event
                 update = self._translate(event)
                 if update and self.on_update:
-                    await self.on_update(update)
+                    # A rendering error in the update callback must never kill
+                    # the turn or orphan the subprocess; mirror the ACP client's
+                    # resilience by isolating callback failures.
+                    try:
+                        await self.on_update(update)
+                    except Exception:
+                        pass
             code = await self.process.wait()
             stderr = (await self.process.stderr.read()).decode(errors="replace")
             if code:

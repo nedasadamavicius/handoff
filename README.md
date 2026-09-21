@@ -33,7 +33,7 @@ On first run in a directory, `handoff` creates local metadata in `.handoff/` and
 Use `handoff` as a lightweight study handoff tool:
 
 ```bash
-handoff init learning
+handoff init learning --mode study
 cd learning
 handoff
 ```
@@ -50,9 +50,9 @@ cd learning
 handoff
 ```
 
-The overview shows what happened last session and what to do next, without needing a long session history.
+The overview shows what happened last session and what to do next, without needing a long session history. In a Study workspace, press `g` to search Markdown notes and browse their incoming and outgoing links in the local knowledge graph. Handoff understands `[[wiki-links]]` and local Markdown links; the graph stays on disk-free, local repository data.
 
-The default tool launcher includes `grok`, `codex`, and `claude`. They must be installed, logged in, and available on `PATH` before launching them from the TUI. Handoff runs providers inside its own agent tabs over stdio; it does not embed their native terminal UI or call provider HTTP APIs.
+The default tool launcher includes `grok`, `codex`, and `claude`. They must be installed, logged in, and available on `PATH` before launching them from the TUI. Start Handoff from inside `psmux` on Windows or `tmux` elsewhere. Claude and Codex stay as windows in that session. On Windows, Grok opens in its own console so its keyboard talks to that console directly.
 
 Existing user configuration with the old default `{codex, claude}` is migrated by adding `grok`; custom tool maps are kept as configured.
 
@@ -69,11 +69,11 @@ Workspace state lives under the active directory's `.handoff/` folder.
 
 ## Product shape
 
-See [DESIGN.md](DESIGN.md) for the ACP harness and dual-mode direction.
+See [DESIGN.md](DESIGN.md) for the external-session manager and workspace direction.
 
 `handoff` opens a terminal UI for the current directory, previewing files, launching configured editors/tools, and saving handoff summaries.
 
-The product has two modes on one stable handoff spine: a dev mode for a code repository (the current ACP multi-agent harness) and a regular/study mode for notes. The local wiki-link graph is a later study feature; graph support is not part of this validation build.
+The product has two modes on one stable handoff spine: Coding and Study. Both retain workspace context, handoff notes, and external AI agent sessions. Study workspaces additionally expose the local Markdown knowledge lookup with `g`.
 
 Workspace metadata lives in readable files inside the current directory:
 
@@ -88,7 +88,7 @@ The Python implementation is a validation build. File formats and the `handoff` 
 
 ## Agent handoff integration
 
-When you open a configured agent tool from `handoff`, such as `grok`, `claude`, or `codex`, `handoff` opens an agent tab in the right pane and generates that tool's memory file (`AGENTS.md` or `CLAUDE.md`) in the workspace root. These files are not created when the app itself opens. The file instructs the agent to:
+When you launch a configured agent tool from `handoff`, such as `grok`, `claude`, or `codex`, Handoff starts it in the workspace directory and generates that tool's memory file (`AGENTS.md` or `CLAUDE.md`) in the workspace root. Claude and Codex are new windows in the psmux or tmux session this terminal is already attached to. On Windows, Grok is a separate console. These files are not created when the app itself opens. The file instructs the agent to:
 
 1. Read `.handoff/WORKSPACE.md` at session start to understand the workspace context.
 2. Treat `.handoff/DRAFT.md` as a live handoff ledger and keep the LAST.md section current after material work, including affected files and relevant `git diff` details.
@@ -96,21 +96,34 @@ When you open a configured agent tool from `handoff`, such as `grok`, `claude`, 
 
 Agents are also instructed to refresh `.handoff/DRAFT.md` before handing control back after material work, even if you did not say the session is ending.
 
-When you press `h` to open the handoff modal, `handoff` snapshots active agent drafts and pre-populates the fields from the current draft plus run snapshots. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove it in the modal. You review, edit if needed, and save. The draft is deleted after saving.
+When you press `h` to open the handoff modal, Handoff pre-populates the fields from the workspace draft and any pending run snapshots. NEXT.md items from the existing handoff are merged with draft NEXT.md items so unfinished carryover stays visible unless you remove them in the modal. You review, edit if needed, and save. The draft is deleted after saving. External sessions share the workspace draft; Handoff does not capture their conversations or send them automatic finalize requests.
 
 The tool file is only created if it does not already exist, so your edits are never overwritten.
 
 ### Providers and setup
 
-The Grok adapter starts `grok agent stdio`. Codex uses a native ACP executable when configured, or the `@agentclientprotocol/codex-acp` npm package through `npx`; configure the adapter and complete `codex login` first. Claude prefers a `claude-agent-acp` or `claude-code-acp` executable. If neither is installed, it falls back to `claude -p --output-format stream-json --verbose --include-partial-messages`; later turns use `--resume`. This fallback is CLI-controlled: permission denials are reported by Claude, and it does not provide Handoff's ACP permission modal.
+Configure the ordinary interactive command you would run yourself, such as `codex` or `claude`. Authentication, prompts, tool approvals, and agent output stay in that tool's own terminal. Custom executable commands are supported; no ACP adapter is required for this launch path.
 
-Unknown configured commands are unsupported and missing provider binaries are reported in the agent tab. Provider compatibility depends on the installed CLI/adapter and login state; this documentation does not promise live-provider compatibility testing.
+Claude and Codex require Handoff to be running inside `psmux` on Windows or `tmux` on Linux and macOS, and they stay in that session. A launch of those tools from a plain shell is refused. On Windows, Grok starts in a new console. Handoff clears inherited `TMUX`, `TMUX_PANE`, and `PSMUX_*` variables for that process, and Open focuses the visible console window. When Windows Terminal is the console host, the helper's console handle is a hidden pseudoconsole, and Open follows it to the terminal window that owns it. Missing executables and launch failures are reported in Handoff. The workspace and handoff features remain available without the multiplexer.
 
-### Agent tabs and shortcuts
+### Agent sessions and shortcuts
 
-Use `t` to show the agent board and `1`–`5` to open or focus configured agent tabs. Each tab has a transcript, prompt field, status, permission controls where ACP supports them, and Send/Cancel/Close controls. Closing a tab or pressing `h` snapshots its draft under `.handoff/runs/`; `h` is the human handoff workflow, not an automatic modal after every agent turn. Press `q` to quit; when a draft or live run is pending, choose Save handoff, Quit without saving, or Cancel.
+The grouping for Handoff, Claude, and Codex is: **Alacritty → one session → windows for each repository**. Handoff names its window `HO: <repository>`. Agent windows use `<Agent>: <repository>`, with a number for repeated launches. Prefix then `w` lists every workspace and agent window; prefix then `n`/`p` moves between them. Grok on Windows opens beside that session, in the console host Windows is configured to use.
 
-While an agent prompt field is focused, typing remains in the prompt editor. The global prompt-safe shortcuts `Ctrl+h`, `Ctrl+q`, and `Ctrl+s` still open handoff, quit, and logs. Existing editor shortcuts and `$EDITOR` behavior remain available. `s` opens logs, `e` edits the selected file, and `h` saves the handoff.
+On Windows, Alacritty can start psmux automatically with this setting in its Windows configuration:
+
+```toml
+[terminal]
+shell = { program = "psmux", args = ["new-session", "-A", "-s", "main"] }
+```
+
+Keep any existing `-f` configuration-file arguments when adjusting your setup. From that session, open each repository as its own window and run `handoff` there. The default prefix is `Ctrl+B`; with a custom `M-q` prefix, use `Alt+Q` instead.
+
+Use `t` to show the session manager and `1`–`5` to launch configured tools. Claude and Codex each add a window to the current psmux or tmux session. Grok on Windows opens a separate console. Select a session and press Open to switch this terminal to a multiplexer window, or to focus a Grok console. Stop ends that session. Exited sessions can be removed from the list. Handoff reports process state; it cannot tell whether an agent is thinking or waiting for your input.
+
+Press `Enter` on a selected session to open it, `Ctrl+K` to force-stop it and its child processes, or `Ctrl+T` to return to the workspace. `s` opens logs, `e` edits the selected file, and `h` saves the handoff.
+
+Quitting Handoff leaves multiplexer windows running. Tracking covers the current Handoff run only: restarting Handoff does not rediscover those windows. Close them from the multiplexer when you are finished. The app still offers to save a handoff when a draft or live session is pending.
 
 **Agent memory files** (matched by configured tool name or command):
 
@@ -119,7 +132,7 @@ While an agent prompt field is focused, typing remains in the prompt editor. The
 | grok | `AGENTS.md` |
 | claude | `CLAUDE.md` |
 | codex | `AGENTS.md` |
-| gemini (legacy memory-file support; no agent tab) | `GEMINI.md` |
+| gemini (memory-file support; not a default tool) | `GEMINI.md` |
 
 The matching memory file is created only for the tool being opened, just before it starts.
 

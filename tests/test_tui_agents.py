@@ -1,227 +1,244 @@
+﻿from __future__ import annotations
+
 import asyncio
-from pathlib import Path
+import threading
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from textual.widgets import ContentSwitcher, Input, RichLog
+import pytest
+from textual.widgets import Button, ContentSwitcher, DataTable, DirectoryTree, Label
 
-from handoff.agents import AgentAdapter, AgentLaunch
 from handoff.config import AppConfig
 from handoff.tui import WorkspaceShell
-from handoff.tui_agents import PermissionScreen, QuitAgentScreen
-from handoff.tui_screens import HandoffScreen
+from handoff.tui_agents import QuitAgentScreen
 from handoff.workspace import current_directory_workspace
 
 
-class FakeClient:
-    instances = []
+class FakeManager:
+    def __init__(self):
+        self.sessions = []
+        self.calls = []
+        self.number = 0
+        self.block_action = None
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.fail_launch = False
 
-    def __init__(self, command, cwd, on_update=None, on_permission=None, on_error=None):
-        self.on_update = on_update
-        self.on_permission = on_permission
-        self.on_error = on_error
-        self.closed = False
-        self.cancelled = False
-        self.prompts = []
-        self.__class__.instances.append(self)
+    def _block(self, action):
+        if self.block_action == action:
+            self.entered.set()
+            if not self.release.wait(5):
+                raise RuntimeError("test operation timed out")
 
-    async def start(self):
-        return self
+    def refresh(self):
+        pass
 
-    async def prompt(self, text):
-        self.prompts.append(text)
-        if self.on_update:
-            await self.on_update({"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "checking"}}})
-            await self.on_update({"update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read file", "status": "pending"}})
-            await self.on_update({"update": {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"}})
-            await self.on_update({"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Use `code` for the answer."}}})
-        return {"stopReason": "end_turn"}
+    def launch(self, name, command):
+        self._block("launch")
+        if self.fail_launch:
+            raise RuntimeError("missing executable")
+        self.number += 1
+        session = SimpleNamespace(name=name, ident=str(self.number), label=f"{name} #{self.number}",
+                                  state="running", pid=self.number, exit_code=None, error=None)
+        self.sessions.append(session)
+        self.calls.append(("launch", session.ident))
+        return session
 
-    async def cancel(self):
-        self.cancelled = True
+    def open(self, session):
+        self.calls.append(("open", session.ident))
 
-    async def close(self):
-        self.closed = True
+    def stop(self, session):
+        self._block("stop")
+        self.calls.append(("stop", session.ident))
+        session.state = "exited"
+
+    def remove(self, session):
+        if session.state in {"running", "starting"}:
+            raise RuntimeError("Stop the session before removing it")
+        self.sessions.remove(session)
+        self.calls.append(("remove", session.ident))
+
+    def shutdown(self):
+        self.calls.append(("shutdown", None))
 
 
-def make_app(tmp_path: Path) -> WorkspaceShell:
+def make_app(tmp_path):
     path = tmp_path / "workspace"
     path.mkdir()
-    workspace = current_directory_workspace(path)
-    config = AppConfig(root=tmp_path / "config", tools={"fake": "fake"})
-    return WorkspaceShell(config, workspace)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config", tools={"codex": "codex", "claude": "claude"}), current_directory_workspace(path))
+    app.session_manager = FakeManager()
+    return app
 
 
-def install_fake(monkeypatch) -> None:
-    adapter = AgentAdapter("fake", "AGENTS.md")
-    monkeypatch.setattr("handoff.tui_agents.resolve_agent", lambda name, command: AgentLaunch(adapter, ["fake"], "acp"))
-    monkeypatch.setattr("handoff.tui_agents.ACPClient", FakeClient)
+async def until(pilot, predicate):
+    for _ in range(60):
+        if predicate():
+            return
+        await pilot.pause(0.02)
+    assert predicate(), "condition did not complete"
 
 
-def test_agent_tab_runs_in_shell_and_prompt_keeps_global_letters(tmp_path: Path, monkeypatch) -> None:
-    install_fake(monkeypatch)
+async def finished(pilot, app):
+    await until(pilot, lambda: app.session_widget._pending == 0)
+    await pilot.pause()
+
+
+def test_two_launches_open_stop_remove_and_selection(tmp_path):
     app = make_app(tmp_path)
 
     async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
-            await pilot.press("1")
-            await pilot.pause()
-            assert app.query_one("#right-switcher", ContentSwitcher).current == "agents-view"
-            sid = next(iter(app.agent_board.sessions))
-            field = app.query_one(f"#agent-input-{sid}", Input)
-            assert field.has_focus
-            await pilot.press("h", "q", "s")
-            assert field.value == "hqs"
-            await pilot.press("enter")
-            await pilot.pause()
-            assert FakeClient.instances[-1].prompts == ["hqs"]
-            assert app.run_ledger.runs[0].prompt_count == 1
-            log = app.query_one(f"#agent-log-{sid}", RichLog)
-            pane = app.query_one(f"#agent-pane-{sid}")
-            assert log.region.height > pane.region.height // 2, (
-                pane.region,
-                log.region,
-                field.region,
-                app.query_one(".agent-footer").region,
-            )
-            # Idle composer sends on Enter; the crimson Stop stays hidden until a run is live.
-            assert not app.query_one(f"#agent-cancel-{sid}").display
-            rendered = "\n".join(line.text for line in log.lines)
-            assert all(label in rendered for label in ("❯ hqs", "think", "Read file", "◆ fake", "code"))
-            code_segments = [
-                segment
-                for line in log.lines
-                for segment in line._segments
-                if "code" in segment.text
-            ]
-            assert code_segments and any(
-                segment.style is not None and segment.style.bgcolor is not None
-                for segment in code_segments
-            )
-            tool_entries = [entry for entry in app.agent_board.sessions[sid].transcript if entry.role == "tool"]
-            assert len(tool_entries) == 1 and "completed" in tool_entries[0].text
-            assert app.query_one(f"#agent-cancel-{sid}").disabled
-            await pilot.press("escape")
-            await pilot.pause()
-            assert app.query_one("#right-switcher", ContentSwitcher).current == "overview-view"
+        async with app.run_test(size=(115, 36)) as pilot:
+            await pilot.press("1", "1")
+            await finished(pilot, app)
+            assert len(app.session_manager.sessions) == 2
+            assert app.tools_launched == ["codex", "codex"]
+            assert (app.workspace.path / "AGENTS.md").exists()
+            assert not app.query("#terminal-pane")
+            table = app.query_one(DataTable)
+            assert table.has_focus
+            await pilot.press("down", "enter")
+            await finished(pilot, app)
+            assert ("open", "2") in app.session_manager.calls
+            await pilot.press("ctrl+k")
+            await finished(pilot, app)
+            assert ("stop", "2") in app.session_manager.calls
+            assert app.session_manager.sessions[0].state == "running"
+            await pilot.click("#session-remove")
+            await finished(pilot, app)
+            assert [session.ident for session in app.session_manager.sessions] == ["1"]
+            await pilot.pause(0.4)
+            await pilot.click("#session-remove")
+            await finished(pilot, app)
+            assert len(app.session_manager.sessions) == 1
+            assert "Stop" in str(app.query_one("#session-status", Label).render())
+            await pilot.click("#session-open")
+            await finished(pilot, app)
+            assert ("open", "1") in app.session_manager.calls
+            await pilot.click("#session-stop")
+            await finished(pilot, app)
+            assert ("stop", "1") in app.session_manager.calls
 
     asyncio.run(scenario())
 
 
-def test_two_instances_of_same_agent_run_side_by_side(tmp_path: Path, monkeypatch) -> None:
-    install_fake(monkeypatch)
+@pytest.mark.parametrize("action", ["launch", "stop"])
+def test_slow_operations_keep_workspace_responsive_and_do_not_steal_focus(tmp_path, action):
     app = make_app(tmp_path)
+    manager = app.session_manager
 
     async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
-            await pilot.press("1")
-            await pilot.pause()
-            await pilot.press("ctrl+t")
-            await pilot.pause()
-            await pilot.press("1")
-            await pilot.pause()
-            sessions = list(app.agent_board.sessions.values())
-            assert len(sessions) == 2
-            assert [s.label for s in sessions] == ["fake", "fake 2"]
-            # Each instance owns a distinct client and its own tab.
-            assert app.query_one("#agent-tab-1")
-            assert app.query_one("#agent-tab-2")
+        async with app.run_test(size=(115, 36)) as pilot:
+            if action == "stop":
+                await pilot.press("1")
+                await finished(pilot, app)
+            manager.block_action = action
+            try:
+                await pilot.press("1" if action == "launch" else "ctrl+k")
+                await until(pilot, manager.entered.is_set)
+                await pilot.press("ctrl+t", "down", "r")
+                assert app.query_one("#right-switcher", ContentSwitcher).current == "overview-view"
+                assert isinstance(app.focused, DirectoryTree)
+                assert not manager.release.is_set()
+                manager.release.set()
+                await finished(pilot, app)
+                assert isinstance(app.focused, DirectoryTree)
+                await pilot.press("t")
+                assert app.query_one(DataTable).has_focus
+            finally:
+                manager.release.set()
 
     asyncio.run(scenario())
 
 
-def test_close_session_removes_its_tab(tmp_path: Path, monkeypatch) -> None:
-    install_fake(monkeypatch)
+def test_queued_launches_are_not_dropped(tmp_path):
     app = make_app(tmp_path)
+    manager = app.session_manager
+    manager.block_action = "launch"
 
     async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
-            await pilot.press("1")
-            await pilot.pause()
-            sid = next(iter(app.agent_board.sessions))
-            await app.agent_board.close_agent(sid)
-            await pilot.pause()
-            assert sid not in app.agent_board.sessions
-            assert not app.query(f"#agent-tab-{sid}")
-            assert FakeClient.instances[-1].closed
+        async with app.run_test(size=(115, 36)) as pilot:
+            try:
+                await pilot.press("1", "2")
+                await until(pilot, manager.entered.is_set)
+                assert app.session_widget._pending == 2
+                manager.release.set()
+                await finished(pilot, app)
+                assert app.tools_launched == ["codex", "claude"]
+                assert len(manager.sessions) == 2
+            finally:
+                manager.release.set()
 
     asyncio.run(scenario())
 
 
-def test_handoff_prefills_merged_agent_snapshot(tmp_path: Path, monkeypatch) -> None:
-    install_fake(monkeypatch)
+def test_refresh_preserves_selection_and_does_not_redraw_unchanged_rows(tmp_path):
     app = make_app(tmp_path)
 
     async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
-            await pilot.press("1")
+        async with app.run_test(size=(115, 36)) as pilot:
+            await pilot.press("1", "2")
+            await finished(pilot, app)
+            await pilot.press("down")
+            widget = app.session_widget
+            table = widget.query_one(DataTable)
+            assert widget._selected_ident == "2"
+            with patch.object(table, "clear") as clear, patch.object(table, "update_cell") as update:
+                await widget._refresh_worker()
+                clear.assert_not_called()
+                update.assert_not_called()
+            app.session_manager.sessions[0].state = "exited"
+            await widget._refresh_worker()
             await pilot.pause()
-            sid = next(iter(app.agent_board.sessions))
-            await app.agent_board.submit(sid, "work")
-            app.workspace.draft_file.write_text(
-                "## LAST.md\n\n### Summary\n\nBuilt it.\n\n### Completed\n\n- Added board.\n\n### Open Issues\n\n- None\n\n## NEXT.md\n\n- Smoke test.\n",
-                encoding="utf-8",
-            )
-            app.action_handoff()
-            await pilot.pause()
-            assert isinstance(app.screen, HandoffScreen)
-            assert "Built it." in app.screen.summary
-            assert "Added board." in app.screen.done
+            assert widget._selected_ident == "2"
+            await pilot.press("ctrl+t", "t")
+            assert table.has_focus
+            assert widget._selected_ident == "2"
 
     asyncio.run(scenario())
 
 
-def test_quit_with_live_agent_offers_handoff(tmp_path: Path, monkeypatch) -> None:
-    install_fake(monkeypatch)
+def test_failed_launch_not_recorded_and_buttons_safe_without_selection(tmp_path):
+    app = make_app(tmp_path)
+    app.session_manager.fail_launch = True
+
+    async def scenario():
+        async with app.run_test(size=(115, 36)) as pilot:
+            await pilot.press("1")
+            await finished(pilot, app)
+            assert app.tools_launched == []
+            assert "missing executable" in str(app.query_one("#session-status", Label).render())
+            await pilot.click("#session-stop")
+            await pilot.pause()
+            assert not app.session_manager.sessions
+            assert "Select" in str(app.query_one("#session-status", Label).render())
+
+    asyncio.run(scenario())
+
+
+def test_quit_and_unmount_release_tracking_without_stopping_agents(tmp_path):
     app = make_app(tmp_path)
 
     async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
+        async with app.run_test(size=(115, 36)) as pilot:
             await pilot.press("1")
-            await pilot.pause()
-            sid = next(iter(app.agent_board.sessions))
-            await app.agent_board.submit(sid, "work")
+            await finished(pilot, app)
             app.action_quit()
             await pilot.pause()
             assert isinstance(app.screen, QuitAgentScreen)
+            await pilot.click("#quit-discard")
+        assert ("shutdown", None) in app.session_manager.calls
+        assert not any(action == "stop" for action, _ in app.session_manager.calls)
+        assert app.session_manager.sessions[0].state == "running"
 
     asyncio.run(scenario())
 
 
-def test_permission_modal_resolves_selected_option(tmp_path: Path, monkeypatch) -> None:
-    install_fake(monkeypatch)
+def test_normal_unmount_releases_tracking(tmp_path):
     app = make_app(tmp_path)
 
     async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
-            await pilot.press("1")
+        async with app.run_test() as pilot:
             await pilot.pause()
-            sid = next(iter(app.agent_board.sessions))
-            request = asyncio.create_task(app.agent_board._request_permission(sid, {
-                "message": "Allow read?",
-                "options": [{"optionId": "allow-once", "name": "Allow once"}],
-            }))
-            await pilot.pause()
-            assert isinstance(app.screen, PermissionScreen)
-            await pilot.click("#permission-0")
-            assert await request == "allow-once"
-
-    asyncio.run(scenario())
-
-
-def test_startup_failure_is_visible_and_can_be_retried(tmp_path: Path, monkeypatch) -> None:
-    app = make_app(tmp_path)
-    monkeypatch.setattr(
-        "handoff.tui_agents.resolve_agent",
-        lambda name, command: (_ for _ in ()).throw(RuntimeError("adapter missing")),
-    )
-
-    async def scenario():
-        async with app.run_test(size=(110, 34)) as pilot:
-            await pilot.press("1")
-            await pilot.pause()
-            sid = next(iter(app.agent_board.sessions))
-            session = app.agent_board.sessions[sid]
-            assert session.status == "dead" and session.client is None
-            rendered = "\n".join(line.text for line in app.query_one(f"#agent-log-{sid}", RichLog).lines)
-            assert "adapter missing" in rendered
+        assert app.session_manager.calls == [("shutdown", None)]
 
     asyncio.run(scenario())

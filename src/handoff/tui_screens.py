@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, ContentSwitcher, Input, Label, TextArea
+from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, MarkdownViewer, TextArea
 
 from handoff.tui_forms import EditableInput, EditableTextArea, PagedTextScreen
 from handoff.weekly import week_label
@@ -270,6 +271,131 @@ class NewEntryScreen(ModalScreen[str | None]):
         self.dismiss(name if name else None)
 
 
+class WorkspaceModeScreen(ModalScreen[str | None]):
+    """One-time choice for an unclassified workspace."""
+
+    CSS = """
+    WorkspaceModeScreen { align: center middle; }
+    #mode-dialog { width: 60; height: auto; border: solid $primary; background: $surface; padding: 1 2; }
+    #mode-title { height: auto; text-style: bold; color: $accent; padding-bottom: 1; }
+    #mode-help { height: auto; color: $text-muted; padding-bottom: 1; }
+    #mode-buttons { height: auto; align-horizontal: right; }
+    .mode-button { width: 12; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mode-dialog"):
+            yield Label("What is this workspace for?", id="mode-title")
+            yield Label("Study adds local Markdown search and a knowledge graph. Coding keeps the project view.", id="mode-help")
+            with Horizontal(id="mode-buttons"):
+                yield Button("Study", id="study", variant="primary", classes="mode-button")
+                yield Button("Coding", id="coding", classes="mode-button")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class KnowledgeScreen(ModalScreen[None]):
+    """Search and browse the local Markdown knowledge graph."""
+
+    CSS = """
+    KnowledgeScreen { align: center middle; }
+    #knowledge-dialog { width: 94%; height: 92%; border: solid $primary; background: $surface; padding: 1; }
+    #knowledge-search { height: auto; margin-bottom: 1; }
+    #knowledge-body { height: 1fr; }
+    #knowledge-results { width: 34%; border: round $secondary; }
+    #knowledge-right { width: 1fr; }
+    #knowledge-preview { height: 1fr; border: round $secondary; padding: 1; }
+    #knowledge-graph { height: 12; border: round $secondary; padding: 1; overflow-y: auto; }
+    #knowledge-status { height: auto; color: $text-muted; padding-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "close", "Close", show=False)]
+
+    def __init__(self, workspace: Path, initial_path: Path | None = None) -> None:
+        super().__init__()
+        self.workspace = workspace
+        self.initial_path = initial_path
+        self.index = None
+        self.selected = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="knowledge-dialog"):
+            yield Input(placeholder="Search notes by title, path, or content", id="knowledge-search")
+            with Horizontal(id="knowledge-body"):
+                yield DataTable(id="knowledge-results", cursor_type="row")
+                with Vertical(id="knowledge-right"):
+                    yield MarkdownViewer("Select a note to preview it.", show_table_of_contents=False, id="knowledge-preview")
+                    yield Label("", id="knowledge-graph", markup=False)
+            yield Label("", id="knowledge-status")
+
+    def on_mount(self) -> None:
+        from handoff.knowledge import KnowledgeIndex
+        self.index = KnowledgeIndex.build(self.workspace)
+        table = self.query_one("#knowledge-results", DataTable)
+        table.add_columns("Note", "Path")
+        if self.initial_path is not None:
+            self.selected = self.initial_path.relative_to(self.workspace)
+            self.query_one("#knowledge-search", Input).value = ""
+        self._refresh_results()
+        self.query_one("#knowledge-search", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "knowledge-search":
+            self._refresh_results()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        try:
+            from pathlib import Path
+            self._select(Path(str(event.row_key.value)))
+        except (AttributeError, TypeError):
+            return
+
+    def _refresh_results(self) -> None:
+        if self.index is None:
+            return
+        table = self.query_one("#knowledge-results", DataTable)
+        table.clear()
+        results = self.index.search(self.query_one("#knowledge-search", Input).value)
+        for note in results:
+            table.add_row(Text(note.title), Text(str(note.path)), key=str(note.path))
+        if self.selected in self.index.notes:
+            self._select(self.selected)
+        elif results:
+            self._select(results[0].path)
+        else:
+            self.query_one("#knowledge-status", Label).update("No matching notes.")
+
+    def _select(self, path) -> None:
+        if self.index is None or path not in self.index.notes:
+            return
+        self.selected = path
+        note = self.index.notes[path]
+        preview = self.query_one("#knowledge-preview", MarkdownViewer)
+        self.run_worker(preview.document.update(note.content), exclusive=True)
+        outgoing, incoming = self.index.neighbors(path)
+        lines = [f"{note.title}", "", "Links to:"]
+        if outgoing:
+            lines.extend(f"  → {item.title}  ({item.path})" for item in outgoing)
+        else:
+            lines.append("  (none)")
+        lines.extend(["", "Linked from:"])
+        if incoming:
+            lines.extend(f"  ← {item.title}  ({item.path})" for item in incoming)
+        else:
+            lines.append("  (none)")
+        if note.unresolved:
+            lines.extend(["", f"Unresolved links: {', '.join(note.unresolved)}"])
+        self.query_one("#knowledge-graph", Label).update("\n".join(lines))
+        self.query_one("#knowledge-status", Label).update(f"{len(self.index.notes)} notes · Esc to return")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class WeeklyReviewScreen(PagedTextScreen):
     FIELD_ORDER = [
         ("page-summary", "weekly-summary", "Summary"),
@@ -414,4 +540,3 @@ class WeeklyReviewScreen(PagedTextScreen):
             "highlights": self.query_one("#weekly-highlights", TextArea).text,
             "carry_forwards": self.query_one("#weekly-carry", TextArea).text,
         })
-

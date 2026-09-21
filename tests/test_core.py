@@ -33,7 +33,10 @@ from handoff.workspace import (
     ensure_workspace_files,
     infer_workspace_type,
     workspace_type,
+    workspace_mode,
+    set_workspace_mode,
 )
+from handoff.knowledge import KnowledgeIndex
 
 
 def test_default_config_uses_in_code_defaults() -> None:
@@ -91,6 +94,31 @@ def test_init_directory_command_creates_local_workspace(tmp_path: Path) -> None:
     assert (target / ".handoff" / "WORKSPACE.md").exists()
     assert (target / ".handoff" / "LAST.md").exists()
     assert (target / ".handoff" / "NEXT.md").exists()
+
+
+def test_init_directory_command_persists_study_mode(tmp_path: Path) -> None:
+    runner = CliRunner()
+    target = tmp_path / "study"
+    result = runner.invoke(app, ["init", str(target), "--mode", "study", "--root", str(tmp_path / "global")])
+
+    assert result.exit_code == 0
+    assert workspace_mode(current_directory_workspace(target)) == "study"
+
+
+def test_knowledge_index_resolves_wikilinks_markdown_links_and_backlinks(tmp_path: Path) -> None:
+    (tmp_path / "basics.md").write_text("# Basics\n\nSee [[advanced]] and [practice](practice.md).", encoding="utf-8")
+    (tmp_path / "advanced.md").write_text("# Advanced\n\nBack to [[basics]].", encoding="utf-8")
+    (tmp_path / "practice.md").write_text("# Practice\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "ignored.md").write_text("# Ignored", encoding="utf-8")
+
+    index = KnowledgeIndex.build(tmp_path)
+    basics = index.notes[Path("basics.md")]
+
+    assert {item.name for item in basics.outgoing} == {"advanced.md", "practice.md"}
+    assert Path("basics.md") in index.notes[Path("advanced.md")].incoming
+    assert len(index.notes) == 3
+    assert [item.title for item in index.search("practice")] == ["Practice", "Basics"]
 
 
 def test_workspace_type_infers_code_only_from_git_directory(tmp_path: Path) -> None:

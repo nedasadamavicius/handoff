@@ -35,8 +35,10 @@ class SessionManagerWidget(Static):
     def compose(self) -> ComposeResult:
         tools = "  ".join(f"{index} {name}" for index, name in enumerate(self.config.tools, 1))
         yield Label(
-            "Interact with agents in their own windows. Quitting Handoff leaves them running; "
-            "tracking is not restored after restart.\n"
+            "Claude and Codex open as windows in this psmux or tmux session. "
+            "On Windows, Grok opens in its own console so its keyboard reaches that console directly. "
+            "Open switches this terminal to a multiplexer window, or brings a Grok console forward. "
+            "Quitting leaves sessions running; tracking is not restored after restart.\n"
             + tools + "\nEnter: Open | Ctrl+K: Stop | Ctrl+T: Workspace",
             id="session-help", markup=False,
         )
@@ -99,7 +101,12 @@ class SessionManagerWidget(Static):
                     await asyncio.to_thread(getattr(self.manager, action), session)
                 if not self._shutdown:
                     self._render_table()
-                    message = "Session launched; interact in its terminal window." if action == "launch" else f"{action.capitalize()} completed."
+                    if action == "launch" and result is not None and result.backend == "console":
+                        message = "Grok opened in its own console. Open focuses that window."
+                    elif action == "launch" and result is not None and result.mux_session:
+                        message = f"Agent window created in session {result.mux_session}. Open switches this terminal to it."
+                    else:
+                        message = f"{action.capitalize()} completed."
                     self.query_one("#session-status", Label).update(message)
         except Exception as exc:
             if not self._shutdown:

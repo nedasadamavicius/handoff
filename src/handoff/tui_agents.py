@@ -475,34 +475,43 @@ class AgentBoard(Widget):
             session.task = None
 
     async def _on_update(self, sid: int, event: dict) -> None:
-        if self._session(sid) is None:
+        session = self._session(sid)
+        if session is None:
             return
         update = event.get("update", event)
-        text = update.get("text") or update.get("content", {}).get("text") if isinstance(update, dict) else None
-        if text:
-            kind = update.get("sessionUpdate")
+        if not isinstance(update, dict):
+            return
+        kind = update.get("sessionUpdate") or update.get("type") or "status"
+        # A tool call carries `content` as a *list* of content blocks; only a
+        # message/thought chunk carries text (directly or under a dict content).
+        text = update.get("text")
+        if not text:
+            content = update.get("content")
+            if isinstance(content, dict):
+                text = content.get("text")
+        if text and kind not in {"tool_call", "tool_call_update"}:
             if kind == "agent_message_chunk":
-                self._session(sid).received_output = True
+                session.received_output = True
                 self._log(sid, "assistant", str(text), append=True)
             elif kind in {"agent_thought_chunk", "thought_chunk"}:
                 self._log(sid, "thought", str(text), append=True)
             else:
                 self._log(sid, "system", str(text))
-        elif isinstance(update, dict):
-            kind = update.get("sessionUpdate") or update.get("type") or "status"
-            if kind in {"available_commands_update", "usage_update", "current_mode_update", "config_options_update"}:
-                return
-            if kind in {"tool_call", "tool_call_update"}:
-                tool_id = str(update.get("toolCallId") or "")
-                if kind == "tool_call" and update.get("title") and tool_id:
-                    self._session(sid).tool_titles[tool_id] = str(update["title"])
-                detail = update.get("title") or self._session(sid).tool_titles.get(tool_id) or "Tool activity"
-                status = update.get("status")
-                suffix = f" · {status}" if status else ""
-                self._log(sid, "tool", f"{detail}{suffix}", key=f"tool:{tool_id}" if tool_id else None)
-            elif kind not in {"agent_message_chunk", "agent_thought_chunk", "thought_chunk"}:
-                detail = update.get("title") or update.get("status") or kind.replace("_", " ")
-                self._log(sid, "system", str(detail))
+            return
+        if kind in {"available_commands_update", "usage_update", "current_mode_update", "config_options_update"}:
+            return
+        if kind in {"tool_call", "tool_call_update"}:
+            tool_id = str(update.get("toolCallId") or "")
+            if kind == "tool_call" and update.get("title") and tool_id:
+                session.tool_titles[tool_id] = str(update["title"])
+            detail = update.get("title") or session.tool_titles.get(tool_id) or "Tool activity"
+            status = update.get("status")
+            suffix = f" · {status}" if status else ""
+            self._log(sid, "tool", f"{detail}{suffix}", key=f"tool:{tool_id}" if tool_id else None)
+            return
+        if kind not in {"agent_message_chunk", "agent_thought_chunk", "thought_chunk"}:
+            detail = update.get("title") or update.get("status") or kind.replace("_", " ")
+            self._log(sid, "system", str(detail))
 
     async def _on_client_error(self, sid: int, error: Exception) -> None:
         self._log(sid, "error", str(error))

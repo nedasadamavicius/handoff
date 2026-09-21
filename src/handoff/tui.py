@@ -305,9 +305,16 @@ class WorkspaceShell(App):
         mode = workspace_mode(self.workspace)
         self.sub_title = mode or kind
         self.show_workspace_overview()
+        self.run_worker(asyncio.to_thread(self._rename_handoff_window), exclusive=False)
         self._check_pending_weeks()
         if mode is None and had_workspace_file:
             self.push_screen(WorkspaceModeScreen(), self._save_workspace_mode)
+
+    def _rename_handoff_window(self) -> None:
+        try:
+            self.session_manager.rename_handoff_window()
+        except Exception:
+            pass
 
     def _save_workspace_mode(self, mode: str | None) -> None:
         if mode is None:

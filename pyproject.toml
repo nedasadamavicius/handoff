@@ -11,6 +11,9 @@ python = ">=3.11,<4.0"
 pyyaml = "^6.0.2"
 textual = "^6.3.0"
 typer = "^0.20.0"
+pyte = "^0.8.2"
+pywinpty = { version = "^3.0.5", markers = "sys_platform == 'win32'" }
+ptyprocess = { version = "^0.7.0", markers = "sys_platform != 'win32'" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"
