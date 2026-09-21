@@ -2,12 +2,39 @@
 
 import asyncio
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Button, DataTable, Label, Static
 
 from handoff.agent_runs import AgentRun, RunLedger
 from handoff.external_sessions import SessionManager
+
+
+class SessionTable(DataTable):
+    """DataTable that only selects (opens) a row on Enter or a double-click.
+
+    A single click just moves the cursor to highlight the row, so a session can
+    be picked once and then acted on with the Stop / Remove buttons.
+
+    Textual dispatches ``_on_click`` to every class in the MRO, so the base
+    ``DataTable._on_click`` (which moves the cursor and posts the selection)
+    still runs after this override -- we only set a flag it reads, and never
+    call ``super()`` here to avoid running the base handler twice.
+    """
+
+    _suppress_select = False
+
+    async def _on_click(self, event: events.Click) -> None:
+        self._suppress_select = event.chain < 2
+
+    def action_select_cursor(self) -> None:
+        self._suppress_select = False
+        super().action_select_cursor()
+
+    def _post_selected_message(self) -> None:
+        if not self._suppress_select:
+            super()._post_selected_message()
 
 
 class SessionManagerWidget(Static):
@@ -39,11 +66,11 @@ class SessionManagerWidget(Static):
             "On Windows, Grok opens in its own console so its keyboard reaches that console directly. "
             "Open switches this terminal to a multiplexer window, or brings a Grok console forward. "
             "Quitting leaves sessions running; tracking is not restored after restart.\n"
-            + tools + "\nEnter: Open | Ctrl+K: Stop | Ctrl+T: Workspace",
+            + tools + "\nClick: Select | Enter or Double-click: Open | Ctrl+K: Stop | Ctrl+T: Workspace",
             id="session-help", markup=False,
         )
         yield Label("No sessions yet. Press a tool number to launch.", id="session-status", markup=False)
-        yield DataTable(id="sessions-table", cursor_type="row")
+        yield SessionTable(id="sessions-table", cursor_type="row")
         with Horizontal(id="session-controls"):
             yield Button("Open", id="session-open")
             yield Button("Stop", id="session-stop")

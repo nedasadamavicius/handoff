@@ -121,6 +121,26 @@ def test_two_launches_open_stop_remove_and_selection(tmp_path):
     asyncio.run(scenario())
 
 
+def test_single_click_selects_without_opening_double_click_opens(tmp_path):
+    app = make_app(tmp_path)
+
+    async def scenario():
+        async with app.run_test(size=(115, 36)) as pilot:
+            await pilot.press("1", "1")
+            await finished(pilot, app)
+            widget = app.session_widget
+            # Second data row (header at y=0, rows at y=1, y=2) is session "2".
+            await pilot.click("#sessions-table", offset=(5, 2))
+            await finished(pilot, app)
+            assert widget._selected_ident == "2"
+            assert not any(action == "open" for action, _ in app.session_manager.calls)
+            await pilot.double_click("#sessions-table", offset=(5, 2))
+            await finished(pilot, app)
+            assert ("open", "2") in app.session_manager.calls
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("action", ["launch", "stop"])
 def test_slow_operations_keep_workspace_responsive_and_do_not_steal_focus(tmp_path, action):
     app = make_app(tmp_path)
