@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from handoff.config import AppConfig, ensure_config, load_config
 from handoff.cli import app
 from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
-from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, run_command
+from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, next_audit_command, run_command
 from handoff.session import parse_session_file, render_handoff, render_session_log, update_day_log
 from handoff.tui import HandoffScreen, LogBrowserScreen, NewEntryScreen, WorkspaceShell, merge_next_text, strip_handoff_frontmatter
 from handoff.weekly import (
@@ -222,6 +222,27 @@ def test_codex_finalize_command_uses_exec_resume_last() -> None:
 def test_codex_finalize_command_skips_non_codex_tools() -> None:
     assert codex_finalize_command("claude", "claude") is None
     assert codex_finalize_command("codex", "npx codex") is None
+
+
+def test_next_audit_command_targets_sonnet_and_next_file() -> None:
+    command = next_audit_command(AppConfig(root=Path("."), tools={"claude": "claude --dangerously"}))
+
+    assert command[0] == "claude"
+    assert command[1] == "-p"
+    assert "--model" in command and command[command.index("--model") + 1] == "sonnet"
+    allowed = command[command.index("--allowedTools") + 1]
+    assert "Write(.handoff/NEXT.md)" in allowed
+    assert "Bash(git log:*)" in allowed
+    assert ".handoff/NEXT.md" in command[2]
+
+
+def test_next_audit_command_requires_claude_tool() -> None:
+    try:
+        next_audit_command(AppConfig(root=Path("."), tools={"codex": "codex"}))
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("expected KeyError when claude is not configured")
 
 
 def test_combined_handoff_draft_roundtrip() -> None:

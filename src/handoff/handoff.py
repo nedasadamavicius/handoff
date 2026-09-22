@@ -41,6 +41,26 @@ def parse_draft_or_files(draft_text: str, next_text: str = "") -> HandoffDraft:
     return HandoffDraft(last=text.strip(), next=normalize_handoff_markdown(next_text).strip())
 
 
+def draft_has_content(text: str) -> bool:
+    """True if a combined draft holds real content beyond the empty scaffold.
+
+    A freshly initialized DRAFT.md contains only section headings, so its mere
+    existence must not be treated as unsaved work.
+    """
+    draft = parse_combined_draft(text)
+    for section in (draft.last, draft.next):
+        for line in section.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped in {"-", "*", "- None", "* None", "None"}:
+                continue
+            if stripped.startswith(("- ", "* ")) and not stripped[2:].strip():
+                continue
+            return True
+    return False
+
+
 def normalize_handoff_markdown(text: str) -> str:
     cleaned: list[str] = []
     for line in text.splitlines():

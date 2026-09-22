@@ -35,6 +35,36 @@ CLAUDE_FINALIZE_PROMPT = (
 )
 
 
+NEXT_AUDIT_PROMPT = (
+    "Audit and clean up .handoff/NEXT.md for this repository. "
+    "Read .handoff/NEXT.md, then use git history and diffs (git log, git diff, git show, git status) "
+    "to judge which entries are obsolete: already shipped or committed, duplicated, or no longer relevant. "
+    "Rewrite .handoff/NEXT.md keeping only durable, still-open next actions, in priority order. "
+    "Preserve the '# Next' heading and use '- ' bullets; write plain human-readable Markdown, not diff notation. "
+    "Remove duplicates, junk lines, and anything the git history shows is already done. "
+    "Do not edit any file other than .handoff/NEXT.md, and make no code changes."
+)
+
+NEXT_AUDIT_ALLOWED_TOOLS = (
+    "Read,Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git show:*),"
+    "Edit(.handoff/NEXT.md),Write(.handoff/NEXT.md)"
+)
+
+
+def next_audit_command(config: AppConfig) -> list[str]:
+    """Build a headless Sonnet command that audits and rewrites .handoff/NEXT.md."""
+    template = config.tools.get("claude")
+    if not template:
+        raise KeyError("Claude tool is not configured; cannot run the Next audit.")
+    parts = format_command(template)
+    executable = parts[0] if parts else "claude"
+    return [
+        executable, "-p", NEXT_AUDIT_PROMPT,
+        "--model", "sonnet",
+        "--allowedTools", NEXT_AUDIT_ALLOWED_TOOLS,
+    ]
+
+
 def format_command(template: str, file: Path | None = None) -> list[str]:
     value = template
     if file is not None:

@@ -6,7 +6,12 @@ from pathlib import Path
 import re
 
 from handoff.documents import merge_next_text
-from handoff.handoff import HandoffDraft, parse_draft_or_files, parse_last_sections
+from handoff.handoff import (
+    HandoffDraft,
+    draft_has_content,
+    parse_draft_or_files,
+    parse_last_sections,
+)
 from handoff.workspace import Workspace
 
 
@@ -118,4 +123,7 @@ class RunLedger:
 
     @property
     def has_pending(self) -> bool:
-        return bool(self._pending)
+        for path in self._pending:
+            if path.exists() and draft_has_content(path.read_text(encoding="utf-8")):
+                return True
+        return False

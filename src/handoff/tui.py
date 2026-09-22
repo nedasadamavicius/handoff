@@ -7,7 +7,7 @@ from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import ContentSwitcher, DataTable, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
+from textual.widgets import Button, ContentSwitcher, DataTable, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
 
 from handoff.config import AppConfig
 from handoff.agent_runs import RunLedger
@@ -32,9 +32,10 @@ from handoff.git import changed_files_from_status, git_status_short
 from handoff.launcher import (
     LaunchError,
     editor_command,
+    next_audit_command,
     run_command,
 )
-from handoff.handoff import parse_draft_or_files, parse_last_sections
+from handoff.handoff import draft_has_content, parse_draft_or_files, parse_last_sections
 from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
 from handoff.tui_forms import EditableInput, EditableTextArea
@@ -151,10 +152,33 @@ class WorkspaceShell(App):
     #next-header {
         height: auto;
         padding: 0 1;
-        text-style: bold;
-        color: $warning;
         background: $warning 12%;
         border-bottom: solid $warning;
+        align: left middle;
+    }
+
+    #next-title {
+        width: 1fr;
+        height: auto;
+        text-style: bold;
+        color: $warning;
+        content-align: left middle;
+    }
+
+    #next-audit {
+        width: auto;
+        min-width: 9;
+        height: 1;
+        margin: 0 0 0 1;
+        padding: 0 1;
+        border: none;
+        background: $warning 25%;
+        color: $text;
+        text-style: none;
+    }
+
+    #next-audit:hover {
+        background: $warning 45%;
     }
 
     #last-scroll {
@@ -220,6 +244,7 @@ class WorkspaceShell(App):
         Binding("w", "edit_workspace_context", "Edit Context"),
         Binding("l", "edit_last", "Edit Last"),
         Binding("n", "edit_next", "Edit Next"),
+        Binding("N", "audit_next", "Audit Next"),
         Binding("t", "tool", "Tool"),
         Binding("ctrl+t", "detach_tool", "Detach Tool", show=False, priority=True),
         Binding("ctrl+k", "kill_tool", "Kill Tool", show=False, priority=True),
@@ -264,6 +289,7 @@ class WorkspaceShell(App):
         self.session_manager = SessionManager(self.workspace.path)
         self.session_widget: SessionManagerWidget | None = None
         self.quit_after_handoff = False
+        self._next_audit_running = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="root"):
@@ -277,7 +303,9 @@ class WorkspaceShell(App):
                             with VerticalScroll(id="last-scroll"):
                                 yield Markdown("", id="last-panel")
                         with Vertical(id="next-container"):
-                            yield Label("What's Next", id="next-header")
+                            with Horizontal(id="next-header"):
+                                yield Label("What's Next", id="next-title")
+                                yield Button("Audit", id="next-audit")
                             with VerticalScroll(id="next-scroll"):
                                 yield Markdown("", id="next-panel")
                     with Vertical(id="preview-view"):
@@ -483,6 +511,44 @@ class WorkspaceShell(App):
 
     def action_edit_next(self) -> None:
         self.edit_path(self.workspace.next_file)
+
+    def action_audit_next(self) -> None:
+        """Run a headless Sonnet job that cleans up NEXT.md from git history."""
+        if not self.workspace.next_file.exists():
+            self.notify("No Next file to audit yet.", severity="warning")
+            return
+        if self._next_audit_running:
+            self.notify("A Next audit is already running.", severity="warning")
+            return
+        try:
+            command = next_audit_command(self.config)
+        except KeyError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self._next_audit_running = True
+        self.notify("Auditing Next with Sonnet...", timeout=6)
+        self.run_worker(self._run_next_audit(command), exclusive=False)
+
+    async def _run_next_audit(self, command: list[str]) -> None:
+        backup = self.workspace.meta / "NEXT.bak.md"
+        try:
+            backup.write_text(self.workspace.next_file.read_text(encoding="utf-8"), encoding="utf-8")
+            code = await asyncio.to_thread(run_command, command, self.workspace.path)
+        except Exception as exc:  # noqa: BLE001 - surface any launch failure to the user
+            self._next_audit_running = False
+            self.notify(f"Next audit failed: {exc}", severity="error")
+            return
+        self._next_audit_running = False
+        if code != 0:
+            self.notify(f"Next audit exited with code {code}. Backup at {backup.name}.", severity="error")
+            return
+        self.show_workspace_overview()
+        self.notify(f"Next audited by Sonnet. Backup saved to {backup.name}.", timeout=8)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "next-audit":
+            event.stop()
+            self.action_audit_next()
 
     def action_tool(self) -> None:
         self.query_one("#right-switcher", ContentSwitcher).current = "agents-view"
@@ -805,7 +871,9 @@ class WorkspaceShell(App):
             self.run_worker(self._shutdown_and_exit(), exclusive=False)
 
     def action_quit(self) -> None:
-        pending = self.workspace.draft_file.exists() or self.run_ledger.has_pending
+        draft = self.workspace.draft_file
+        pending = draft.exists() and draft_has_content(draft.read_text(encoding="utf-8"))
+        pending = pending or self.run_ledger.has_pending
         pending = pending or any(s.state in {"starting", "running"} for s in self.session_manager.sessions)
         if not pending:
             self.run_worker(self._shutdown_and_exit(), exclusive=False)

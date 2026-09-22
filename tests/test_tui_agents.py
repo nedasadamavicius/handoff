@@ -253,6 +253,38 @@ def test_quit_and_unmount_release_tracking_without_stopping_agents(tmp_path):
     asyncio.run(scenario())
 
 
+def test_quit_with_empty_scaffold_draft_exits_without_prompt(tmp_path):
+    app = make_app(tmp_path)
+
+    async def scenario():
+        async with app.run_test(size=(115, 36)) as pilot:
+            # Fresh workspace: DRAFT.md exists as an empty scaffold, no runs, no sessions.
+            assert app.workspace.draft_file.exists()
+            app.action_quit()
+            await pilot.pause()
+            assert not isinstance(app.screen, QuitAgentScreen)
+        assert ("shutdown", None) in app.session_manager.calls
+
+    asyncio.run(scenario())
+
+
+def test_audit_next_button_runs_sonnet_job_and_backs_up(tmp_path):
+    app = make_app(tmp_path)
+    calls = []
+
+    async def scenario():
+        with patch("handoff.tui.run_command", lambda command, cwd: calls.append((command, cwd)) or 0):
+            async with app.run_test(size=(115, 36)) as pilot:
+                await pilot.click("#next-audit")
+                await until(pilot, lambda: bool(calls) and not app._next_audit_running)
+        command, _cwd = calls[0]
+        assert "sonnet" in command
+        assert "-p" in command
+        assert (app.workspace.meta / "NEXT.bak.md").exists()
+
+    asyncio.run(scenario())
+
+
 def test_normal_unmount_releases_tracking(tmp_path):
     app = make_app(tmp_path)
 

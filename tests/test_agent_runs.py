@@ -65,6 +65,15 @@ def test_absent_draft_is_safe_and_consume_stops_replay(tmp_path: Path) -> None:
     assert "- Done" in ledger.merged_draft("").last
 
 
+def test_empty_scaffold_snapshot_is_not_pending(tmp_path: Path) -> None:
+    ws = workspace(tmp_path)
+    ws.draft_file.write_text(draft("", "- None", "- None", "- None"), encoding="utf-8")
+    ledger = RunLedger(ws)
+    ledger.finish(ledger.begin("agent", "cmd"), "ok")
+    assert ledger.runs[0].draft_snapshot is not None
+    assert not ledger.has_pending
+
+
 def test_finish_records_status_and_time(tmp_path: Path) -> None:
     ws = workspace(tmp_path)
     ws.draft_file.write_text("draft", encoding="utf-8")
