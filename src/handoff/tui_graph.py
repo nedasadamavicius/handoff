@@ -57,7 +57,7 @@ class GraphView(Widget):
     }
     """
     ALLOW_SELECT = False  # dragging pans or moves nodes; it must not start a text selection
-    LABEL_WIDTH = 18
+    LABEL_WIDTH = 24  # preferred label width; titles are not truncated to this value
     MIN_ZOOM = 0.1  # dots per world unit
     MAX_ZOOM = 12.0
 
@@ -106,7 +106,7 @@ class GraphView(Widget):
         return math.ceil(self._radius(path) / 2)
 
     def _label(self, path: Path) -> str:
-        return self.index.notes[path].title[: self.LABEL_WIDTH]
+        return self.index.notes[path].title
 
     def _labelled(self) -> set[Path]:
         """Nodes whose title is drawn: every node, unless the last render had no room for it."""
@@ -154,32 +154,37 @@ class GraphView(Widget):
     def _compute_world(self) -> None:
         """Force-directed layout (Fruchterman-Reingold) inside a circular boundary.
 
-        Linked notes pull together, every note pushes apart, and stragglers settle on an
-        outer ring instead of piling up against straight walls.
+        Linked notes pull together. Truly disconnected notes are kept out of the main
+        cluster and placed on a quiet outer ring so they read as standalone notes.
         """
         paths = sorted(self.index.notes, key=lambda p: str(p).lower())
-        n = len(paths)
+        degree = {p: len(self.index.notes[p].outgoing) + len(self.index.notes[p].incoming) for p in paths}
+        orphans = [path for path in paths if degree[path] == 0]
+        layout_paths = [path for path in paths if degree[path] > 0] or paths
+        n = len(layout_paths)
         span = max(80.0, math.sqrt(n) * 40)
         self.world = {}
         if n == 1:
-            self.world[paths[0]] = (span / 2, span / 2)
+            self.world[layout_paths[0]] = (span / 2, span / 2)
+            if orphans:
+                self.world.update(self._outer_ring(orphans, span))
             return
         pos = {}
-        for i, path in enumerate(paths):  # deterministic golden-angle spiral start
+        for i, path in enumerate(layout_paths):  # deterministic golden-angle spiral start
             angle = i * 2.399963
             radius = math.sqrt((i + 0.5) / n) * span / 2
             pos[path] = [span / 2 + math.cos(angle) * radius, span / 2 + math.sin(angle) * radius]
-        edges = [(a, b) for a, note in self.index.notes.items() for b in note.outgoing]
-        degree = {p: len(self.index.notes[p].outgoing) + len(self.index.notes[p].incoming) for p in paths}
+        layout_set = set(layout_paths)
+        edges = [(a, b) for a, note in self.index.notes.items() for b in note.outgoing if a in layout_set and b in layout_set]
         k = math.sqrt(span * span / n) * LAYOUT_SPACING
         temperature = span / 8
         started = time.monotonic()
         for _ in range(max(20, min(150, 30000 // n))):
             if time.monotonic() - started > LAYOUT_BUDGET_SECONDS:
                 break
-            force = {path: [0.0, 0.0] for path in paths}
-            for i, a in enumerate(paths):
-                for b in paths[i + 1:]:
+            force = {path: [0.0, 0.0] for path in layout_paths}
+            for i, a in enumerate(layout_paths):
+                for b in layout_paths[i + 1:]:
                     dx = pos[a][0] - pos[b][0]
                     dy = pos[a][1] - pos[b][1]
                     dist = max(0.01, math.hypot(dx, dy))
@@ -198,7 +203,7 @@ class GraphView(Widget):
                 force[a][1] -= dy / dist * pull
                 force[b][0] += dx / dist * pull
                 force[b][1] += dy / dist * pull
-            for path in paths:
+            for path in layout_paths:
                 force[path][0] += (span / 2 - pos[path][0]) * LAYOUT_GRAVITY
                 force[path][1] += (span / 2 - pos[path][1]) * LAYOUT_GRAVITY
                 fx, fy = force[path]
@@ -214,8 +219,28 @@ class GraphView(Widget):
             temperature *= 0.95
         xs = [p[0] for p in pos.values()]
         ys = [p[1] for p in pos.values()]
-        scale = span / max(1.0, max(xs) - min(xs), max(ys) - min(ys))
-        self.world = {path: ((pos[path][0] - min(xs)) * scale, (pos[path][1] - min(ys)) * scale) for path in paths}
+        scale = (span * 0.58) / max(1.0, max(xs) - min(xs), max(ys) - min(ys))
+        centre_x = sum(xs) / len(xs)
+        centre_y = sum(ys) / len(ys)
+        self.world = {
+            path: (span / 2 + (pos[path][0] - centre_x) * scale, span / 2 + (pos[path][1] - centre_y) * scale)
+            for path in layout_paths
+        }
+        if orphans:
+            self.world.update(self._outer_ring(orphans, span))
+
+    @staticmethod
+    def _outer_ring(paths: list[Path], span: float) -> dict[Path, tuple[float, float]]:
+        """Place disconnected notes beyond the connected cluster."""
+        radius = span * 0.72
+        count = len(paths)
+        return {
+            path: (
+                span / 2 + math.cos(-math.pi / 2 + i * 2 * math.pi / count) * radius,
+                span / 2 + math.sin(-math.pi / 2 + i * 2 * math.pi / count) * radius,
+            )
+            for i, path in enumerate(paths)
+        }
 
     def fit(self) -> None:
         """Zoom and pan so every node (and its title, when shown) is visible."""
@@ -224,7 +249,9 @@ class GraphView(Widget):
         xs = [x for x, _ in self.world.values()]
         ys = [y for _, y in self.world.values()]
         span_x, span_y = max(xs) - min(xs), max(ys) - min(ys)
-        label_dots = (self.LABEL_WIDTH + 8) * 2
+        longest_label = max((len(self._label(path)) for path in self.world), default=self.LABEL_WIDTH)
+        label_width = min(longest_label, max(self.LABEL_WIDTH, self.size.width // 2))
+        label_dots = (label_width + 8) * 2
         width_dots, height_dots = self.size.width * 2, self.size.height * 4
         fit_x = (width_dots - label_dots) / span_x if span_x else self.MAX_ZOOM
         fit_y = (height_dots - 12) / span_y if span_y else self.MAX_ZOOM
@@ -301,15 +328,21 @@ class GraphView(Widget):
         self._hidden_labels = set()
         for path in order:
             dx, dy = centers[path]
-            x = round(dx / 2) + self._radius_cells(path) + 1
-            y = round(dy / 4)
             label = self._label(path)
-            for row in (y, y + 1, y - 1):  # fall back to the rows beside the disc when crowded
-                span = {(x + i, row) for i in range(-1, len(label) + 1)}
-                if 0 <= row < height and not span & taken:
-                    y = row
+            right_x = round(dx / 2) + self._radius_cells(path) + 1
+            left_x = round(dx / 2) - self._radius_cells(path) - len(label) - 1
+            y = round(dy / 4)
+            placed = False
+            for x in (right_x, left_x):
+                for row in (y, y + 1, y - 1):  # fall back to rows beside the disc when crowded
+                    span = {(x + i, row) for i in range(-1, len(label) + 1)}
+                    if 0 <= x and x + len(label) <= width and 0 <= row < height and not span & taken:
+                        y = row
+                        placed = True
+                        break
+                if placed:
                     break
-            else:
+            if not placed:
                 self._hidden_labels.add(path)
                 continue
             taken |= span
@@ -318,7 +351,7 @@ class GraphView(Widget):
             elif path in linked:
                 style = self._style(foreground, surface, bold=True)
             else:
-                style = self._style(_mix(surface, foreground, 0.6), surface)
+                style = self._style(_mix(surface, foreground, 0.6), surface, dim=True)
             for i, ch in enumerate(label):
                 if 0 <= x + i < width:
                     cells[y][x + i] = (ch, style)
@@ -338,11 +371,11 @@ class GraphView(Widget):
                 text.append("\n")
         return text
 
-    def _style(self, fg: RGB | None, bg: RGB, bold: bool = False) -> Style:
-        key = (fg, bg, bold)
+    def _style(self, fg: RGB | None, bg: RGB, bold: bool = False, dim: bool = False) -> Style:
+        key = (fg, bg, bold, dim)
         style = self._style_cache.get(key)
         if style is None:
-            style = Style(color=_hex(fg) if fg else None, bgcolor=_hex(bg), bold=bold or None)
+            style = Style(color=_hex(fg) if fg else None, bgcolor=_hex(bg), bold=bold or None, dim=dim or None)
             self._style_cache[key] = style
         return style
 
