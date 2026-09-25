@@ -132,7 +132,6 @@ Quitting Handoff leaves multiplexer windows running. Tracking covers the current
 | grok | `AGENTS.md` |
 | claude | `CLAUDE.md` |
 | codex | `AGENTS.md` |
-| gemini (memory-file support; not a default tool) | `GEMINI.md` |
 
 The matching memory file is created only for the tool being opened, just before it starts.
 

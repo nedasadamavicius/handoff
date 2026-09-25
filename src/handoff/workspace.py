@@ -196,7 +196,6 @@ def infer_workspace_type(workspace: Workspace) -> str:
 TOOL_MEMORY_FILES: dict[str, str] = {
     "claude": "CLAUDE.md",
     "codex": "AGENTS.md",
-    "gemini": "GEMINI.md",
 }
 
 _TOOL_MEMORY_TEMPLATE = """\

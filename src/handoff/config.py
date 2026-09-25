@@ -8,7 +8,7 @@ import yaml
 
 
 DEFAULT_ROOT = Path.home() / ".handoff"
-REMOVED_DEFAULT_TOOLS = {"gemini"}
+REMOVED_DEFAULT_TOOLS = {"gemini", "pi"}
 
 
 @dataclass(frozen=True)
