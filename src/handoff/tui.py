@@ -817,7 +817,15 @@ class WorkspaceShell(App):
         if workspace_mode(self.workspace) != "study":
             self.notify("Knowledge lookup is available in Study workspaces.", severity="information")
             return
-        self.push_screen(KnowledgeScreen(self.workspace.path, self.active_file if self.active_file and is_markdown_file(self.active_file) else None))
+        initial = self.active_file if self.active_file and is_markdown_file(self.active_file) else None
+        self._open_knowledge(initial)
+
+    def _open_knowledge(self, initial: Path | None) -> None:
+        def on_result(path: Path | None) -> None:
+            if path is not None:
+                self.edit_path(path)
+                self._open_knowledge(path)
+        self.push_screen(KnowledgeScreen(self.workspace.path, initial), on_result)
 
     def action_handoff(self) -> None:
         workspace = self.workspace

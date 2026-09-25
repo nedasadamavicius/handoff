@@ -3,14 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, MarkdownViewer, TextArea
+from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, MarkdownViewer, Static, TextArea
 
 from handoff.tui_forms import EditableInput, EditableTextArea, PagedTextScreen
+from handoff.tui_graph import GraphView
 from handoff.weekly import week_label
 
 
@@ -299,21 +301,22 @@ class WorkspaceModeScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class KnowledgeScreen(ModalScreen[None]):
-    """Search and browse the local Markdown knowledge graph."""
+class KnowledgeScreen(ModalScreen[Path | None]):
+    """Browse the local Markdown knowledge graph; `e` edits the selected note externally."""
 
     CSS = """
     KnowledgeScreen { align: center middle; }
     #knowledge-dialog { width: 94%; height: 92%; border: solid $primary; background: $surface; padding: 1; }
-    #knowledge-search { height: auto; margin-bottom: 1; }
     #knowledge-body { height: 1fr; }
-    #knowledge-results { width: 34%; border: round $secondary; }
-    #knowledge-right { width: 1fr; }
-    #knowledge-preview { height: 1fr; border: round $secondary; padding: 1; }
-    #knowledge-graph { height: 12; border: round $secondary; padding: 1; overflow-y: auto; }
+    #knowledge-graph { width: 50%; border: round $secondary; }
+    #knowledge-preview { width: 1fr; border: round $secondary; padding: 0 1; }
     #knowledge-status { height: auto; color: $text-muted; padding-top: 1; }
     """
-    BINDINGS = [Binding("escape", "close", "Close", show=False)]
+    PLACEHOLDER = "Select a note from the graph to preview it."
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=False),
+        Binding("e", "edit", "Edit", show=False),
+    ]
 
     def __init__(self, workspace: Path, initial_path: Path | None = None) -> None:
         super().__init__()
@@ -321,78 +324,72 @@ class KnowledgeScreen(ModalScreen[None]):
         self.initial_path = initial_path
         self.index = None
         self.selected = None
+        self.preview_source = self.PLACEHOLDER
 
     def compose(self) -> ComposeResult:
         with Vertical(id="knowledge-dialog"):
-            yield Input(placeholder="Search notes by title, path, or content", id="knowledge-search")
             with Horizontal(id="knowledge-body"):
-                yield DataTable(id="knowledge-results", cursor_type="row")
-                with Vertical(id="knowledge-right"):
-                    yield MarkdownViewer("Select a note to preview it.", show_table_of_contents=False, id="knowledge-preview")
-                    yield Label("", id="knowledge-graph", markup=False)
+                with VerticalScroll(id="knowledge-preview"):
+                    yield Static(self.PLACEHOLDER, id="knowledge-preview-body")
+                yield GraphView(None, id="knowledge-graph")
             yield Label("", id="knowledge-status")
 
     def on_mount(self) -> None:
         from handoff.knowledge import KnowledgeIndex
         self.index = KnowledgeIndex.build(self.workspace)
-        table = self.query_one("#knowledge-results", DataTable)
-        table.add_columns("Note", "Path")
+
+        # Update GraphView with the index
+        graph = self.query_one("#knowledge-graph", GraphView)
+        graph.index = self.index
+        graph.refresh()
+
         if self.initial_path is not None:
             self.selected = self.initial_path.relative_to(self.workspace)
-            self.query_one("#knowledge-search", Input).value = ""
-        self._refresh_results()
-        self.query_one("#knowledge-search", Input).focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "knowledge-search":
-            self._refresh_results()
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        try:
-            from pathlib import Path
-            self._select(Path(str(event.row_key.value)))
-        except (AttributeError, TypeError):
-            return
-
-    def _refresh_results(self) -> None:
-        if self.index is None:
-            return
-        table = self.query_one("#knowledge-results", DataTable)
-        table.clear()
-        results = self.index.search(self.query_one("#knowledge-search", Input).value)
-        for note in results:
-            table.add_row(Text(note.title), Text(str(note.path)), key=str(note.path))
-        if self.selected in self.index.notes:
+            graph.selected_path = self.selected
             self._select(self.selected)
-        elif results:
-            self._select(results[0].path)
-        else:
-            self.query_one("#knowledge-status", Label).update("No matching notes.")
 
-    def _select(self, path) -> None:
+        self._update_status()
+
+    def on_graph_view_node_selected(self, event: GraphView.NodeSelected) -> None:
+        """Handle graph node selection."""
+        try:
+            self._select(event.path)
+        except Exception:
+            return
+
+    def _select(self, path: Path) -> None:
+        """Select a note and display it in the preview."""
         if self.index is None or path not in self.index.notes:
             return
+
         self.selected = path
         note = self.index.notes[path]
-        preview = self.query_one("#knowledge-preview", MarkdownViewer)
-        self.run_worker(preview.document.update(note.content), exclusive=True)
-        outgoing, incoming = self.index.neighbors(path)
-        lines = [f"{note.title}", "", "Links to:"]
-        if outgoing:
-            lines.extend(f"  → {item.title}  ({item.path})" for item in outgoing)
-        else:
-            lines.append("  (none)")
-        lines.extend(["", "Linked from:"])
-        if incoming:
-            lines.extend(f"  ← {item.title}  ({item.path})" for item in incoming)
-        else:
-            lines.append("  (none)")
-        if note.unresolved:
-            lines.extend(["", f"Unresolved links: {', '.join(note.unresolved)}"])
-        self.query_one("#knowledge-graph", Label).update("\n".join(lines))
-        self.query_one("#knowledge-status", Label).update(f"{len(self.index.notes)} notes · Esc to return")
+        # A single Static with Rich's Markdown stays cheap even for long notes;
+        # MarkdownViewer mounts a widget per block and makes every later redraw slow.
+        self.preview_source = note.content
+        self.query_one("#knowledge-preview-body", Static).update(RichMarkdown(note.content))
+        self.query_one("#knowledge-preview", VerticalScroll).scroll_home(animate=False)
+
+        # Update graph
+        graph = self.query_one("#knowledge-graph", GraphView)
+        graph.selected_path = path
+        graph.refresh()
+
+        self._update_status()
+
+    def _update_status(self) -> None:
+        """Update the status line."""
+        self.query_one("#knowledge-status", Label).update(f"{len(self.index.notes)} notes - e edit - Esc to return")
+
+    def action_edit(self) -> None:
+        """Open the selected note in the external editor."""
+        if not self.selected:
+            return
+        note_path = self.workspace / self.selected
+        self.dismiss(note_path)
 
     def action_close(self) -> None:
+        """Close the screen without editing."""
         self.dismiss(None)
 
 

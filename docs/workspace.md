@@ -52,4 +52,4 @@ cd learning
 handoff
 ```
 
-The overview shows what happened last session and what to do next, without needing a long session history. In a Study workspace, press `g` to search Markdown notes and browse their incoming and outgoing links in the local knowledge graph. Handoff understands `[[wiki-links]]` and local Markdown links; the graph stays on disk-free, local repository data.
+The overview shows what happened last session and what to do next, without needing a long session history. In a Study workspace, press `g` to browse the local knowledge graph: a read-only note preview on the left and a node-link graph of all notes on the right. Notes are dots sized by how linked they are; the selected note and its links are highlighted. Click a node to preview it, drag a node to rearrange it, drag empty space to pan, scroll to zoom, and press `e` to open the note in your configured editor. Handoff understands `[[wiki-links]]` and local Markdown links; the graph stays on disk-free, local repository data.
