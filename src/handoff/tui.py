@@ -4,10 +4,12 @@ import asyncio
 import os
 from pathlib import Path
 
+from textual import events
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.errors import NoWidget
 from textual.widgets import Button, ContentSwitcher, DataTable, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
 
 from handoff.config import AppConfig
@@ -145,9 +147,6 @@ class WorkspaceShell(App):
         border: round $primary 35%;
     }
 
-    #browser.focused-pane {
-        border: heavy $accent;
-    }
 
     #right-pane {
         width: 1fr;
@@ -175,9 +174,6 @@ class WorkspaceShell(App):
         border: round $success;
     }
 
-    #last-container.focused-pane {
-        border: heavy $accent;
-    }
 
     #next-container {
         width: 1fr;
@@ -185,9 +181,6 @@ class WorkspaceShell(App):
         border: round $warning 55%;
     }
 
-    #next-container.focused-pane {
-        border: heavy $accent;
-    }
 
     #last-header {
         height: auto;
@@ -272,17 +265,7 @@ class WorkspaceShell(App):
         background: $background;
     }
 
-    #preview.focused-pane {
-        border: heavy $accent;
-    }
 
-    #text-preview.focused-pane {
-        border: heavy $accent;
-    }
-
-    DirectoryTree:focus {
-        border: heavy $accent;
-    }
     """
 
     BINDINGS = [
@@ -378,6 +361,11 @@ class WorkspaceShell(App):
         ensure_themes_dir(self.config.themes_dir)
         register_all_themes(self, self.config)
         self.query_one("#file-tree", DirectoryTree).focus()
+        # Clicks pick the pane via on_mouse_down; letting these widgets grab focus
+        # first would bounce focus away from the tree and rebuild the footer twice.
+        for widget in self.query("#last-scroll, #next-scroll, #next-audit, #preview, #text-preview"):
+            widget.focus_on_click = lambda: False
+        self.theme_changed_signal.subscribe(self, lambda _theme: self.update_focus_styles())
         had_workspace_file = self.workspace.workspace_file.exists()
         kind = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
         ensure_workspace_files(self.workspace, workspace_kind=kind, workspace_mode=None if had_workspace_file else "coding")
@@ -737,20 +725,65 @@ class WorkspaceShell(App):
             self.focus_area = "next"
             self.update_focus_styles()
 
+    def pane_for_widget(self, widget) -> str | None:
+        """Map a clicked widget to the focus area of the pane containing it."""
+        node = widget
+        while node is not None:
+            node_id = getattr(node, "id", None)
+            if node_id == "browser":
+                return "files"
+            if node_id in ("preview", "text-preview"):
+                return "preview" if self.preview_mode else None
+            if node_id == "last-container":
+                return "last"
+            if node_id == "next-container":
+                return "next"
+            node = node.parent
+        return None
+
+    async def on_event(self, event: events.Event) -> None:
+        # Pick the pane as soon as the raw click arrives, instead of waiting for the
+        # forwarded MouseDown to bubble back up through every nested widget.
+        if isinstance(event, events.MouseDown) and not event.is_forwarded:
+            self.focus_pane_at(event.screen_x, event.screen_y)
+        await super().on_event(event)
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        # Fallback for clicks injected past on_event (e.g. Textual's test pilot); a
+        # no-op when on_event already handled the click.
+        self.focus_pane_at(event.screen_x, event.screen_y)
+
+    def focus_pane_at(self, x: int, y: int) -> None:
+        try:
+            widget, _ = self.screen.get_widget_at(x, y)
+        except NoWidget:
+            return
+        area = self.pane_for_widget(widget)
+        if area is None:
+            return
+        tree = self.query_one("#file-tree", DirectoryTree)
+        if area == self.focus_area and self.focused is tree:
+            return
+        self.focus_area = area
+        # Navigation keys are routed through the tree, so it keeps keyboard focus.
+        tree.focus(scroll_visible=False)
+        self.update_focus_styles()
+
     def update_focus_styles(self) -> None:
-        browser = self.query_one("#browser", Vertical)
-        markdown_preview = self.query_one("#preview", MarkdownViewer)
-        text_preview = self.query_one("#text-preview", TextArea)
-        last_container = self.query_one("#last-container", Vertical)
-        next_container = self.query_one("#next-container", Vertical)
-        browser.set_class(self.focus_area == "files", "focused-pane")
-        markdown_preview.set_class(
-            self.focus_area == "preview" and self.active_preview == "markdown",
-            "focused-pane",
-        )
-        text_preview.set_class(self.focus_area == "preview" and self.active_preview == "text", "focused-pane")
-        last_container.set_class(self.focus_area == "last", "focused-pane")
-        next_container.set_class(self.focus_area == "next", "focused-pane")
+        # Set the focus border inline rather than toggling a CSS class: a class change
+        # restyles every descendant (each Markdown block), which made focus moves lag.
+        # Clearing the inline border falls back to the pane's stylesheet border.
+        focused = {
+            "#browser": self.focus_area == "files",
+            "#preview": self.focus_area == "preview" and self.active_preview == "markdown",
+            "#text-preview": self.focus_area == "preview" and self.active_preview == "text",
+            "#last-container": self.focus_area == "last",
+            "#next-container": self.focus_area == "next",
+        }
+        accent = self.get_css_variables()["accent"]
+        for selector, is_focused in focused.items():
+            pane = self.query_one(selector)
+            pane.styles.border = ("heavy", accent) if is_focused else None
 
     def handle_navigation_key(self, key: str) -> None:
         if isinstance(self.focused, TextArea):

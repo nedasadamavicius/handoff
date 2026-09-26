@@ -452,6 +452,44 @@ def test_edit_keeps_open_file_preview_instead_of_returning_home(tmp_path: Path, 
     asyncio.run(exercise_edit())
 
 
+def test_clicking_a_pane_moves_focus_to_it(tmp_path: Path) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    note = workspace_path / "note.py"
+    note.write_text("print('hi')\n", encoding="utf-8")
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    async def exercise_clicks() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#file-tree")
+            assert app.focus_area == "files"
+
+            await pilot.click("#next-scroll")
+            assert app.focus_area == "next"
+            assert app.query_one("#next-container").styles.border_top[0] == "heavy"
+            assert app.query_one("#browser").styles.border_top[0] != "heavy"
+            assert app.focused is tree
+
+            await pilot.click("#last-scroll")
+            assert app.focus_area == "last"
+
+            await pilot.click("#file-tree")
+            assert app.focus_area == "files"
+            assert app.query_one("#browser").styles.border_top[0] == "heavy"
+
+            app.active_file = note
+            app.show_text_preview("print('hi')\n")
+            await pilot.pause()
+            await pilot.click("#text-preview")
+            assert app.focus_area == "preview"
+            assert app.query_one("#text-preview").styles.border_top[0] == "heavy"
+            assert app.focused is tree
+
+    asyncio.run(exercise_clicks())
+
+
 def test_new_folder_action_creates_folder_in_workspace(tmp_path: Path) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
