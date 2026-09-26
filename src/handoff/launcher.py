@@ -80,6 +80,42 @@ def editor_command(config: AppConfig, file: Path, editor_name: str | None = None
     return format_command(template, file=file)
 
 
+TERMINAL_EDITORS = frozenset({
+    "nvim", "vim", "vi", "hx", "helix", "nano", "micro", "kak", "ne", "joe", "mcedit",
+})
+
+
+def is_terminal_editor(command: list[str]) -> bool:
+    """True when the editor runs inside this terminal and the TUI must hand it the screen."""
+    if not command:
+        return False
+    name = Path(command[0]).stem.lower()
+    if name in {"emacs", "emacsclient"}:
+        return any(arg in {"-nw", "-t", "--tty", "--no-window-system"} for arg in command[1:])
+    return name in TERMINAL_EDITORS
+
+
+def spawn_detached(command: list[str], cwd: Path) -> None:
+    """Start a GUI editor without blocking or taking over the terminal."""
+    command = [arg for arg in command if arg not in {"--wait", "-w"}]
+    executable = shutil.which(command[0]) if command else None
+    resolved = [executable, *command[1:]] if executable else command
+    kwargs: dict = {
+        "cwd": str(cwd),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(resolved, **kwargs)
+    except (FileNotFoundError, OSError) as exc:
+        raise LaunchError(f"Could not launch editor: {command[0] if command else command}") from exc
+
+
 def tool_command(config: AppConfig, tool_name: str) -> str:
     template = config.tools.get(tool_name)
     if template is None:

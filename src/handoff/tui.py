@@ -33,8 +33,10 @@ from handoff.git import changed_files_from_status, git_status_short
 from handoff.launcher import (
     LaunchError,
     editor_command,
+    is_terminal_editor,
     next_audit_command,
     run_command,
+    spawn_detached,
 )
 from handoff.handoff import draft_has_content, parse_draft_or_files, parse_last_sections
 from handoff.session import now_local
@@ -594,12 +596,25 @@ class WorkspaceShell(App):
     def edit_path(self, path: Path) -> None:
         command = editor_command(self.config, path)
         try:
-            with self.suspend():
-                run_command(command, cwd=self.workspace.path)
+            if is_terminal_editor(command):
+                with self.suspend():
+                    run_command(command, cwd=self.workspace.path)
+            else:
+                spawn_detached(command, cwd=self.workspace.path)
         except LaunchError as exc:
             self.notify(str(exc), severity="error")
             return
-        self.action_refresh()
+        self.refresh_after_edit()
+
+    def refresh_after_edit(self) -> None:
+        """Reload the tree but keep whatever view was open before the editor ran."""
+        self.query_one("#file-tree", DirectoryTree).reload()
+        if self.preview_mode and self.active_file is not None and self.active_file.exists():
+            self.reload_active_preview()
+        elif self.preview_mode:
+            self.show_workspace_overview()
+        else:
+            self.render_overview_panels()
 
     def action_edit_workspace_context(self) -> None:
         self.edit_path(self.workspace.workspace_file)

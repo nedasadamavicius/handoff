@@ -12,7 +12,15 @@ from typer.testing import CliRunner
 from handoff.config import AppConfig, ensure_config, load_config
 from handoff.cli import app
 from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
-from handoff.launcher import CODEX_FINALIZE_PROMPT, LaunchError, codex_finalize_command, next_audit_command, run_command
+from handoff.launcher import (
+    CODEX_FINALIZE_PROMPT,
+    LaunchError,
+    codex_finalize_command,
+    is_terminal_editor,
+    next_audit_command,
+    run_command,
+    spawn_detached,
+)
 from handoff.session import parse_session_file, render_handoff, render_session_log, update_day_log
 from handoff.tui import HandoffScreen, LogBrowserScreen, NewEntryScreen, WorkspaceShell, merge_next_text, strip_handoff_frontmatter
 from handoff.weekly import (
@@ -210,6 +218,31 @@ def test_run_command_resolves_windows_command_wrapper(tmp_path: Path, monkeypatc
     assert calls == [([wrapper, "--wait", "notes.md"], str(tmp_path), False)]
 
 
+def test_is_terminal_editor_distinguishes_tui_and_gui_editors() -> None:
+    assert is_terminal_editor(["nvim", "a.md"])
+    assert is_terminal_editor(["hx", "a.md"])
+    assert is_terminal_editor([r"C:\tools\nvim.exe", "a.md"])
+    assert is_terminal_editor(["emacs", "-nw", "a.md"])
+    assert not is_terminal_editor(["emacs", "a.md"])
+    assert not is_terminal_editor(["code", "--wait", "a.md"])
+    assert not is_terminal_editor([])
+
+
+def test_spawn_detached_drops_wait_and_does_not_block(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[list[str], dict]] = []
+    wrapper = r"C:\Program Files\Microsoft VS Code\bin\code.cmd"
+    monkeypatch.setattr("handoff.launcher.shutil.which", lambda executable: wrapper)
+    monkeypatch.setattr(
+        "handoff.launcher.subprocess.Popen",
+        lambda command, **kwargs: calls.append((command, kwargs)),
+    )
+
+    spawn_detached(["code", "--wait", "notes.md"], cwd=tmp_path)
+    command, kwargs = calls[0]
+    assert command == [wrapper, "notes.md"]
+    assert kwargs["cwd"] == str(tmp_path)
+
+
 def test_codex_finalize_command_uses_exec_resume_last() -> None:
     command = codex_finalize_command("codex", "codex --full-auto")
 
@@ -385,6 +418,38 @@ def test_ctrl_s_saves_open_handoff_instead_of_stacking_modal(tmp_path: Path) -> 
             assert workspace.last_file.exists()
 
     asyncio.run(exercise_handoff())
+
+
+def test_edit_keeps_open_file_preview_instead_of_returning_home(tmp_path: Path, monkeypatch) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    note = workspace_path / "note.py"
+    note.write_text("before\n", encoding="utf-8")
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    def fake_editor(command, cwd) -> None:
+        note.write_text("after\n", encoding="utf-8")
+
+    monkeypatch.setattr("handoff.tui.spawn_detached", fake_editor)
+    monkeypatch.setattr("handoff.tui.editor_command", lambda config, path: ["code", str(path)])
+
+    async def exercise_edit() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.active_file = note
+            app.show_text_preview("before\n")
+            await pilot.pause()
+
+            app.action_edit()
+            await pilot.pause()
+
+            assert app.preview_mode
+            assert app.active_file == note
+            assert app.query_one("#right-switcher").current == "text-preview-view"
+            assert app.query_one("#text-preview", TextArea).text == "after\n"
+
+    asyncio.run(exercise_edit())
 
 
 def test_new_folder_action_creates_folder_in_workspace(tmp_path: Path) -> None:
