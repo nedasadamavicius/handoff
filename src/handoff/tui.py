@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from textual.actions import SkipAction
@@ -62,16 +63,62 @@ from handoff.workspace import (
 )
 
 
-HIDDEN_TREE_NAMES = {".git", ".handoff", "__pycache__", ".pytest_cache", ".claude"}
+HIDDEN_TREE_NAMES = {
+    ".git",
+    ".handoff",
+    ".claude",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
+HIDDEN_TREE_SUFFIXES = {".pyc", ".pyo"}
+WATCH_INTERVAL = 1.0
+
+
+def is_tree_visible(name: str) -> bool:
+    return name not in HIDDEN_TREE_NAMES and Path(name).suffix not in HIDDEN_TREE_SUFFIXES
+
+
+def directory_signature(directories: list[Path]) -> tuple:
+    """Names and kinds of the visible entries in each directory, for change detection."""
+    signature = []
+    for directory in directories:
+        try:
+            with os.scandir(directory) as entries:
+                listing = tuple(sorted((entry.name, entry.is_dir()) for entry in entries if is_tree_visible(entry.name)))
+        except OSError:
+            listing = None
+        signature.append((str(directory), listing))
+    return tuple(signature)
+
+
+def file_signature(path: Path | None) -> tuple[int, int] | None:
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 class WorkspaceDirectoryTree(DirectoryTree):
     def filter_paths(self, paths):
-        return [
-            path
-            for path in paths
-            if path.name not in HIDDEN_TREE_NAMES and path.suffix not in {".pyc", ".pyo"}
-        ]
+        return [path for path in paths if is_tree_visible(path.name)]
+
+    def expanded_paths(self) -> list[Path]:
+        paths = []
+        pending = [self.root]
+        while pending:
+            node = pending.pop()
+            if node.data is not None and (node is self.root or node.is_expanded):
+                paths.append(Path(node.data.path))
+                pending.extend(child for child in node.children if child.allow_expand)
+        return paths
 
     def on_key(self, event) -> None:
         if event.key in {"left", "right", "up", "down", "pageup", "pagedown", "home", "end", "enter"}:
@@ -290,6 +337,8 @@ class WorkspaceShell(App):
         self.session_widget: SessionManagerWidget | None = None
         self.quit_after_handoff = False
         self._next_audit_running = False
+        self._watch_busy = False
+        self._watch_state: tuple | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="root"):
@@ -335,6 +384,7 @@ class WorkspaceShell(App):
         self.show_workspace_overview()
         self.run_worker(asyncio.to_thread(self._rename_handoff_window), exclusive=False)
         self._check_pending_weeks()
+        self.set_interval(WATCH_INTERVAL, self._watch_workspace)
         if mode is None and had_workspace_file:
             self.push_screen(WorkspaceModeScreen(), self._save_workspace_mode)
 
@@ -375,7 +425,53 @@ class WorkspaceShell(App):
             return False
         return True
 
-    def show_workspace_overview(self) -> None:
+    async def _watch_workspace(self) -> None:
+        """Poll the workspace and live-update the tree, overview, and open preview."""
+        if self._watch_busy:
+            return
+        self._watch_busy = True
+        try:
+            tree = self.query_one("#file-tree", WorkspaceDirectoryTree)
+            directories = tree.expanded_paths()
+            active_file = self.active_file if self.preview_mode else None
+            workspace = self.workspace
+            state = await asyncio.to_thread(
+                lambda: (
+                    directory_signature(directories),
+                    (file_signature(workspace.last_file), file_signature(workspace.next_file)),
+                    (active_file, file_signature(active_file)),
+                )
+            )
+            previous, self._watch_state = self._watch_state, state
+            if previous is None:
+                return
+            if state[0] != previous[0]:
+                await tree.reload()
+            if state[1] != previous[1]:
+                self.render_overview_panels()
+            if state[2] != previous[2] and state[2][0] == previous[2][0] and active_file is not None:
+                self.reload_active_preview()
+        except Exception:
+            pass
+        finally:
+            self._watch_busy = False
+
+    def reload_active_preview(self) -> None:
+        if self.active_file is None or not self.active_file.exists():
+            return
+        text = preview_file(self.active_file)
+        if self.active_preview == "markdown":
+            preview = self.query_one("#preview", MarkdownViewer)
+            scroll_y = preview.scroll_y
+            self.run_worker(preview.document.update(text), exclusive=True)
+            self.call_after_refresh(preview.scroll_to, y=scroll_y, animate=False)
+        else:
+            preview = self.query_one("#text-preview", TextArea)
+            scroll_y = preview.scroll_y
+            preview.load_text(text)
+            self.call_after_refresh(preview.scroll_to, y=scroll_y, animate=False)
+
+    def render_overview_panels(self) -> None:
         workspace = self.workspace
         latest = workspace.last_handoff()
         next_text = (
@@ -388,10 +484,13 @@ class WorkspaceShell(App):
             if latest
             else "No session recorded yet.\n\nPress **h** after working to save your first handoff."
         )
-        self.query_one("#right-switcher", ContentSwitcher).current = "overview-view"
         last_text = strip_first_subheading(strip_first_heading(latest_text))
         self.query_one("#last-panel", Markdown).update(last_text)
         self.query_one("#next-panel", Markdown).update(strip_first_heading(next_text))
+
+    def show_workspace_overview(self) -> None:
+        self.query_one("#right-switcher", ContentSwitcher).current = "overview-view"
+        self.render_overview_panels()
         self.tool_picker_open = False
         self.preview_mode = False
         self.focus_area = "files"

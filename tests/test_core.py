@@ -409,6 +409,38 @@ def test_new_folder_action_creates_folder_in_workspace(tmp_path: Path) -> None:
     asyncio.run(exercise_new_folder())
 
 
+def test_workspace_watcher_updates_tree_and_overview_live(tmp_path: Path) -> None:
+    workspace_path = tmp_path / "workspace"
+    (workspace_path / "src").mkdir(parents=True)
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    def tree_labels() -> set[str]:
+        tree = app.query_one("#file-tree")
+        labels, pending = set(), [tree.root]
+        while pending:
+            node = pending.pop()
+            labels.add(str(node.label))
+            pending.extend(node.children)
+        return labels
+
+    async def exercise_watcher() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await app._watch_workspace()
+            assert "added.txt" not in tree_labels()
+
+            (workspace_path / "added.txt").write_text("hi", encoding="utf-8")
+            workspace.next_file.write_text("# Next\n\n- Watched item\n",encoding="utf-8")
+            await app._watch_workspace()
+            await pilot.pause()
+
+            assert "added.txt" in tree_labels()
+            assert "Watched item" in app.query_one("#next-panel").source
+
+    asyncio.run(exercise_watcher())
+
+
 def test_log_browser_separates_loading_from_pane_focus(tmp_path: Path) -> None:
     workspace = current_directory_workspace(tmp_path)
     workspace.sessions_dir.mkdir(parents=True)
