@@ -26,7 +26,9 @@ see against a real one.
    enter a name such as `handoff`, and press **Create new app password**. Copy
    it; Nextcloud shows it only once.
 2. Run `handoff sync login`. It asks for the server URL, your username and the
-   app password (typed hidden). Use `--folder` to change the remote folder name
+   app password. The password is shown as you type, so you can see a paste worked;
+   it is revocable in Nextcloud. To skip the prompt, set `HANDOFF_WEBDAV_PASSWORD`
+   first or pass `--password`. Use `--folder` to change the remote folder name
    from the default `handoff`.
 3. Handoff tests the connection. On success it saves the server, username and
    folder in `~/.handoff/config.yaml` and the app password in

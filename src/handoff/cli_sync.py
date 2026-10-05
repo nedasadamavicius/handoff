@@ -8,6 +8,7 @@ from handoff.cli_common import ConfigRoot, RepositoryDirectory
 from handoff.config import DEFAULT_ROOT, AppConfig, ensure_config, update_config_value
 from handoff.note_sync import has_unsynced, sync_for_repo
 from handoff.webdav import (
+    PASSWORD_ENVIRONMENT_VARIABLE,
     AuthError,
     OfflineError,
     SyncError,
@@ -48,7 +49,11 @@ def pull_on_open(config: AppConfig, repo: Path) -> None:
 def sync_login(
     server: str = typer.Option(..., prompt="Nextcloud URL (e.g. https://cloud.example.com)"),
     username: str = typer.Option(..., prompt=True),
-    password: str = typer.Option(..., prompt="App password", hide_input=True),
+    password: str = typer.Option(
+        ...,
+        prompt="App password (visible as you type; it is revocable in Nextcloud)",
+        envvar=PASSWORD_ENVIRONMENT_VARIABLE,
+    ),
     folder: str = typer.Option("handoff", help="Remote folder holding all repos."),
     root: ConfigRoot = DEFAULT_ROOT,
 ) -> None:
