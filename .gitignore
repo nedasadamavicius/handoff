@@ -13,8 +13,6 @@ build/
 
 # Claude Code
 .claude/*
-CLAUDE.md
 
 # Codex
 .codex/*
-AGENTS.md
