@@ -4,16 +4,24 @@ The board deliberately keeps provider details behind the small client
 interfaces.  This also makes it straightforward to exercise with fake
 clients in headless tests.
 """
+
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
+from rich.console import Group
+from rich.markdown import Markdown
+from rich.padding import Padding
+from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
+from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     Input,
@@ -25,15 +33,10 @@ from textual.widgets import (
     TabbedContent,
     TabPane,
 )
-from textual.widget import Widget
-from rich.console import Group
-from rich.markdown import Markdown
-from rich.padding import Padding
-from rich.text import Text
 
 from handoff.acp.client import ACPClient
-from handoff.agents import AgentUnavailable, resolve_agent
 from handoff.agent_runs import AgentRun, RunLedger
+from handoff.agents import resolve_agent
 from handoff.claude_stream import ClaudeStreamClient
 from handoff.config import AppConfig
 from handoff.workspace import Workspace
@@ -41,7 +44,11 @@ from handoff.workspace import Workspace
 
 class PermissionScreen(ModalScreen[str | None]):
     """Small, explicit permission chooser; closing the modal means cancel."""
-    CSS = "PermissionScreen { align: center middle; } #permission { width: 70; height: auto; padding: 1 2; background: $surface; }"
+
+    CSS = """
+    PermissionScreen { align: center middle; }
+    #permission { width: 70; height: auto; padding: 1 2; background: $surface; }
+    """
 
     def __init__(self, params: dict[str, Any]) -> None:
         super().__init__()
@@ -67,7 +74,10 @@ class PermissionScreen(ModalScreen[str | None]):
 class QuitAgentScreen(ModalScreen[str]):
     """Choose how to leave a workspace with an unfinished handoff."""
 
-    CSS = "QuitAgentScreen { align: center middle; } #quit-agent { width: 62; height: auto; padding: 1 2; background: $surface; }"
+    CSS = """
+    QuitAgentScreen { align: center middle; }
+    #quit-agent { width: 62; height: auto; padding: 1 2; background: $surface; }
+    """
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def compose(self) -> ComposeResult:
@@ -94,6 +104,7 @@ class TranscriptEntry:
 @dataclass
 class AgentSession:
     """One live agent instance, owning its own tab, client, and transcript."""
+
     sid: int
     agent: str
     command: str
@@ -199,8 +210,6 @@ class AgentBoard(Widget):
             with TabbedContent(id="agent-tabs"):
                 yield TabPane("＋ New", self._launcher(), id="agent-overview")
 
-    # ----- launcher ---------------------------------------------------------
-
     def _launcher(self) -> Widget:
         items = []
         for index, name in enumerate(self.agents, start=1):
@@ -226,14 +235,12 @@ class AgentBoard(Widget):
     def show_launcher(self) -> None:
         try:
             self.query_one("#agent-tabs", TabbedContent).active = "agent-overview"
-        except Exception:
+        except NoMatches:
             pass
         try:
             self.query_one("#agent-launcher", ListView).focus()
-        except Exception:
+        except NoMatches:
             self.focus()
-
-    # ----- session pane -----------------------------------------------------
 
     def _session_pane(self, session: AgentSession) -> Widget:
         sid = session.sid
@@ -302,8 +309,6 @@ class AgentBoard(Widget):
         line.append(" close session", style=muted)
         return line
 
-    # ----- transcript -------------------------------------------------------
-
     def _session(self, sid: int) -> AgentSession | None:
         return self.sessions.get(sid)
 
@@ -335,7 +340,7 @@ class AgentBoard(Widget):
             return
         try:
             log = self.query_one(f"#agent-log-{sid}", RichLog)
-        except Exception:
+        except NoMatches:
             return
         log.clear()
         for entry in session.transcript:
@@ -378,17 +383,15 @@ class AgentBoard(Widget):
         sid = session.sid
         try:
             self.query_one(f"#agent-hint-{sid}", Static).update(self._hint(session))
-        except Exception:
+        except NoMatches:
             pass
         try:
             busy = status in {"streaming", "waiting-for-permission"}
             stop = self.query_one(f"#agent-cancel-{sid}", Button)
             stop.disabled = not busy
             stop.styles.display = "block" if busy else "none"
-        except Exception:
+        except NoMatches:
             pass
-
-    # ----- lifecycle --------------------------------------------------------
 
     def _label_for(self, agent: str) -> str:
         used = {session.label for session in self.sessions.values() if session.agent == agent}
@@ -421,12 +424,12 @@ class AgentBoard(Widget):
         sid = session.sid
         try:
             launch = resolve_agent(session.agent, session.command)
-            callback = lambda event: self._on_update(sid, event)
-            permission = lambda params: self._request_permission(sid, params)
+            callback = partial(self._on_update, sid)
+            permission = partial(self._request_permission, sid)
             cls = ACPClient if launch.backend == "acp" else ClaudeStreamClient
             options = {"on_update": callback, "on_permission": permission}
             if cls is ACPClient:
-                options["on_error"] = lambda error: self._on_client_error(sid, error)
+                options["on_error"] = partial(self._on_client_error, sid)
             session.client = cls(launch.command, self.workspace.path, **options)
             await session.client.start()
             self._set_status(session, "idle")
@@ -445,7 +448,10 @@ class AgentBoard(Widget):
             await self._start(session)
             if session.client is None:
                 return
-        if (session.task is not None and not session.task.done()) or session.status in {"streaming", "waiting-for-permission"}:
+        if (session.task is not None and not session.task.done()) or session.status in {
+            "streaming",
+            "waiting-for-permission",
+        }:
             return
         self._log(sid, "user", prompt)
         if session.run is None:
@@ -575,8 +581,6 @@ class AgentBoard(Widget):
 
         await asyncio.gather(*(_close(session) for session in list(self.sessions.values())), return_exceptions=True)
 
-    # ----- events -----------------------------------------------------------
-
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "agent-launcher":
             return
@@ -608,8 +612,6 @@ class AgentBoard(Widget):
         event.input.value = ""
         self.run_worker(self.submit(sid, prompt), exclusive=False)
 
-    # ----- handoff / quit hooks --------------------------------------------
-
     def snapshot_active(self) -> None:
         for session in self.sessions.values():
             if session.run is not None and session.run.ended_at is None:
@@ -619,12 +621,10 @@ class AgentBoard(Widget):
     def has_live_runs(self) -> bool:
         return any(session.run is not None and session.run.ended_at is None for session in self.sessions.values())
 
-    # ----- actions ----------------------------------------------------------
-
     def _active_sid(self) -> int | None:
         try:
             active = self.query_one("#agent-tabs", TabbedContent).active
-        except Exception:
+        except NoMatches:
             return None
         if active and active.startswith("agent-tab-"):
             try:

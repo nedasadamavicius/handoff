@@ -92,7 +92,9 @@ def resolve_agent(name: str, command: str) -> AgentLaunch:
     executable_name = _executable_name(executable) if executable else ""
     if adapter.key == "codex" and executable_name == "codex":
         if len(parts) > 1:
-            raise AgentUnavailable("Codex native CLI flags cannot be forwarded to codex-acp; configure codex-acp directly.")
+            raise AgentUnavailable(
+                "Codex native CLI flags cannot be forwarded to codex-acp; configure codex-acp directly."
+            )
         found = _available("codex-acp")
         if found:
             return AgentLaunch(adapter, [found], "acp")
@@ -112,7 +114,10 @@ def resolve_agent(name: str, command: str) -> AgentLaunch:
                 raise AgentUnavailable(f"Claude ACP adapter is unavailable: {executable!r}; install it and log in.")
             return AgentLaunch(adapter, [found, *parts[1:]], "acp")
         if len(parts) > 1:
-            raise AgentUnavailable("Claude native TUI flags cannot be forwarded to the headless stream backend; configure an ACP adapter directly.")
+            raise AgentUnavailable(
+                "Claude native TUI flags cannot be forwarded to the headless stream backend; "
+                "configure an ACP adapter directly."
+            )
         for candidate in ("claude-agent-acp", "claude-code-acp"):
             found = _available(candidate)
             if found:
@@ -120,7 +125,11 @@ def resolve_agent(name: str, command: str) -> AgentLaunch:
         found = _resolve_executable(executable)
         if not found:
             raise AgentUnavailable("Claude Code is unavailable; install claude or a Claude ACP adapter, then log in.")
-        return AgentLaunch(adapter, [found, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"], "claude-stream")
+        return AgentLaunch(
+            adapter,
+            [found, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"],
+            "claude-stream",
+        )
     if not executable or (Path(executable).name != executable and not Path(executable).exists()):
         raise AgentUnavailable(f"Grok executable is unavailable: {executable!r}; install it and log in.")
     if not Path(executable).exists() and not _available(executable):
@@ -133,5 +142,7 @@ def resolve_agent(name: str, command: str) -> AgentLaunch:
     elif len(parts) == 1:
         command_parts = adapter.spawn_command(found)
     else:
-        raise AgentUnavailable("Grok native CLI flags cannot be used for an ACP tab; configure 'grok agent stdio' instead.")
+        raise AgentUnavailable(
+            "Grok native CLI flags cannot be used for an ACP tab; configure 'grok agent stdio' instead."
+        )
     return AgentLaunch(adapter, command_parts, "acp")

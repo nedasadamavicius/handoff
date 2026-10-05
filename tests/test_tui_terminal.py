@@ -5,7 +5,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
 from textual.app import App, ComposeResult
 
 from handoff.config import AppConfig
@@ -14,20 +13,21 @@ from handoff.tui_terminal import TerminalPane
 
 def test_terminal_queries_receive_replies():
     from unittest.mock import Mock
+
     import pyte
+
     from handoff.tui_terminal import TerminalScreen
 
     session = Mock()
     screen = TerminalScreen(80, 24, session)
     stream = pyte.ByteStream(screen)
     stream.feed(b"\x1b[3;7H\x1b[6n\x1b[5n\x1b[c")
-    assert [call.args[0] for call in session.write.call_args_list] == [
-        b"\x1b[3;7R", b"\x1b[0n", b"\x1b[?6c"
-    ]
+    assert [call.args[0] for call in session.write.call_args_list] == [b"\x1b[3;7R", b"\x1b[0n", b"\x1b[?6c"]
 
 
 def test_final_burst_is_rendered_after_child_goes_idle():
     import asyncio
+
     import pyte
 
     pane = TerminalPane(AppConfig(tools={}), Path.cwd())
@@ -51,8 +51,9 @@ def test_final_burst_is_rendered_after_child_goes_idle():
 
 def test_paste_is_forwarded_with_bracketed_paste_mode():
     from unittest.mock import Mock
-    from textual.events import Paste
+
     import pyte
+    from textual.events import Paste
 
     pane = TerminalPane(AppConfig(tools={}), Path.cwd())
     pane._pty = Mock()
@@ -76,9 +77,7 @@ class TerminalTestApp(App):
 
 def test_idle_render_shows_tools():
     """Before launch, render shows available tools."""
-    config = AppConfig(
-        tools={"echo": "echo", "grok": "grok"}
-    )
+    config = AppConfig(tools={"echo": "echo", "grok": "grok"})
     pane = TerminalPane(config, Path.cwd())
 
     async def _test():
@@ -90,18 +89,19 @@ def test_idle_render_shows_tools():
             assert "select an agent" in text_content.lower()
 
     import asyncio
+
     asyncio.run(_test())
 
 
 def test_launch_success():
     """launch() spawns the tool and returns True."""
     script = 'import sys; sys.stdout.write("READY\\n"); sys.stdout.flush(); import time; time.sleep(10)'
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(script)
         script_path = f.name
 
     try:
-        cmd = f'{sys.executable} {script_path}'
+        cmd = f"{sys.executable} {script_path}"
         config = AppConfig(tools={"test": cmd})
         pane = TerminalPane(config, Path.cwd())
 
@@ -110,9 +110,10 @@ def test_launch_success():
             async with app.run_test() as pilot:
                 result = pane.launch("test")
                 assert result is True
-                assert pane.is_running()
+                assert pane.is_process_running()
 
                 import asyncio
+
                 for _ in range(250):
                     await pilot.pause()
                     await asyncio.sleep(0.02)
@@ -127,6 +128,7 @@ def test_launch_success():
                 pane.kill()
 
         import asyncio
+
         asyncio.run(_test())
     finally:
         try:
@@ -138,12 +140,12 @@ def test_launch_success():
 def test_key_input_echo():
     """Input sent to terminal appears in output."""
     script = 'import sys; sys.stdout.write("READY\\n"); sys.stdout.flush(); line=sys.stdin.readline(); sys.stdout.write("GOT:"+line); sys.stdout.flush()'
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(script)
         script_path = f.name
 
     try:
-        cmd = f'{sys.executable} {script_path}'
+        cmd = f"{sys.executable} {script_path}"
         config = AppConfig(tools={"echo": cmd})
         pane = TerminalPane(config, Path.cwd())
 
@@ -152,6 +154,7 @@ def test_key_input_echo():
             async with app.run_test() as pilot:
                 pane.launch("echo")
                 import asyncio
+
                 for _ in range(250):
                     await pilot.pause()
                     await asyncio.sleep(0.02)
@@ -175,6 +178,7 @@ def test_key_input_echo():
                 pane.kill()
 
         import asyncio
+
         asyncio.run(_test())
     finally:
         try:
@@ -194,12 +198,14 @@ def test_shutdown():
         async with app.run_test() as pilot:
             pane.launch("sleep")
             import asyncio
+
             await asyncio.sleep(0.1)
-            assert pane.is_running()
+            assert pane.is_process_running()
             await pane.shutdown()
-            assert not pane.is_running()
+            assert not pane.is_process_running()
 
     import asyncio
+
     asyncio.run(_test())
 
 
@@ -219,6 +225,7 @@ def test_launch_twice_returns_false():
             pane.kill()
 
     import asyncio
+
     asyncio.run(_test())
 
 
@@ -232,9 +239,10 @@ def test_launch_invalid_tool_returns_false():
         async with app.run_test() as pilot:
             result = pane.launch("nonexistent")
             assert result is False
-            assert not pane.is_running()
+            assert not pane.is_process_running()
 
     import asyncio
+
     asyncio.run(_test())
 
 
@@ -249,16 +257,18 @@ def test_render_after_exit():
         async with app.run_test() as pilot:
             pane.launch("sleep")
             import asyncio
+
             await asyncio.sleep(0.2)
-            assert pane.is_running()
+            assert pane.is_process_running()
 
             # Explicitly kill
             pane.kill()
-            assert not pane.is_running()
+            assert not pane.is_process_running()
 
             # After killing, should show ended message
             text_content = pane.render().plain
             assert "ended" in text_content.lower()
 
     import asyncio
+
     asyncio.run(_test())

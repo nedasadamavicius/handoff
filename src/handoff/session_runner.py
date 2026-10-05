@@ -48,6 +48,7 @@ def main() -> int:
     hwnd = None
     if os.name == "nt":
         from ctypes import wintypes
+
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.GetConsoleWindow.restype = wintypes.HWND
         kernel.SetConsoleTitleW.argtypes = [wintypes.LPCWSTR]

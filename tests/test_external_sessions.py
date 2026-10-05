@@ -4,14 +4,12 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 import handoff.external_sessions as backend
 from handoff.external_sessions import (
-    ExternalSession,
     SessionManager,
     WindowInfo,
     WindowsProcessHandle,
@@ -28,7 +26,9 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "IS_WINDOWS", True)
     monkeypatch.setattr(subprocess, "CREATE_NEW_CONSOLE", 0x10, raising=False)
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
-    monkeypatch.setattr(backend.shutil, "which", lambda name: "psmux.exe" if name == "psmux" else str(tmp_path / (name + ".exe")))
+    monkeypatch.setattr(
+        backend.shutil, "which", lambda name: "psmux.exe" if name == "psmux" else str(tmp_path / (name + ".exe"))
+    )
     handle = Mock()
     handle.alive.return_value = True
     handles = Mock(return_value=handle)
@@ -119,7 +119,8 @@ def test_workspaces_add_agent_windows_to_their_attached_sessions(environment, mo
     assert second.mux_session == "repo-b"
     assert [args[args.index("-t") + 1] for args in windows] == ["repo-a", "repo-b"]
     assert [args[args.index("-c") + 1] for args in windows] == [
-        str(first_manager.workspace), str(second_manager.workspace),
+        str(first_manager.workspace),
+        str(second_manager.workspace),
     ]
 
 
@@ -495,7 +496,11 @@ def test_posix_launch_uses_tmux_and_kills_helper_not_the_server(tmp_path, monkey
 
 
 def test_parse_preserves_spaces_and_native_metacharacters():
-    assert parse_command('"C:\\Program Files\\agent.exe" "hello world" a^b') == [r'C:\Program Files\agent.exe', 'hello world', 'a^b']
+    assert parse_command('"C:\\Program Files\\agent.exe" "hello world" a^b') == [
+        r"C:\Program Files\agent.exe",
+        "hello world",
+        "a^b",
+    ]
     assert parse_command(["agent", 'a"b', "a&b"]) == ["agent", 'a"b', "a&b"]
 
 
@@ -510,12 +515,22 @@ def test_shim_metacharacters_rejected_after_resolution(environment, monkeypatch)
 def invoke_runner(tmp_path, argv, backend="mux"):
     status = tmp_path / "status.json"
     request = tmp_path / "request.json"
-    request.write_text(json.dumps({
-        "argv": argv, "workspace": str(tmp_path), "status_path": str(status), "label": "test", "backend": backend,
-    }))
+    request.write_text(
+        json.dumps(
+            {
+                "argv": argv,
+                "workspace": str(tmp_path),
+                "status_path": str(status),
+                "label": "test",
+                "backend": backend,
+            }
+        )
+    )
     result = subprocess.run(
         [sys.executable, "-m", "handoff.session_runner", str(request)],
-        capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
+        capture_output=True,
+        timeout=10,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
     return result, json.loads(status.read_text())
 
@@ -564,7 +579,7 @@ def test_runner_console_drops_mux_markers_and_legacy_override(tmp_path, monkeypa
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows command shim")
 def test_runner_cmd_shim_with_spaced_path_and_argument(tmp_path):
     shim = tmp_path / "tool with spaces.cmd"
-    shim.write_text('@echo off\necho %~1\nexit /b 4\n')
+    shim.write_text("@echo off\necho %~1\nexit /b 4\n")
     result, data = invoke_runner(tmp_path, [str(shim), "hello world"])
     assert result.returncode == data["exit_code"] == 4
     assert b"hello world" in result.stdout
@@ -572,7 +587,9 @@ def test_runner_cmd_shim_with_spaced_path_and_argument(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process handle")
 def test_real_process_handle_detects_exit_without_window():
-    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"], creationflags=subprocess.CREATE_NO_WINDOW)
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"], creationflags=subprocess.CREATE_NO_WINDOW
+    )
     handle = WindowsProcessHandle(process.pid)
     try:
         assert handle.alive()

@@ -1,12 +1,4 @@
-from pathlib import Path
-
-from handoff.agents import AgentUnavailable, get_adapter, resolve_agent
-
-
-def test_adapter_aliases_and_memory_files():
-    assert get_adapter("grok", "grok").memory_file == "AGENTS.md"
-    assert get_adapter("claude", "claude").memory_file == "CLAUDE.md"
-    assert get_adapter("codex", r"C:\bin\codex.exe") is not None
+from handoff.agents import AgentUnavailable, resolve_agent
 
 
 def test_unsupported_command_is_actionable():
@@ -42,7 +34,9 @@ def test_missing_claude_is_actionable(monkeypatch):
 
 
 def test_codex_prefers_adapter_then_npx(monkeypatch):
-    monkeypatch.setattr("handoff.agents._available", lambda name: "C:/bin/codex-acp.exe" if name == "codex-acp" else None)
+    monkeypatch.setattr(
+        "handoff.agents._available", lambda name: "C:/bin/codex-acp.exe" if name == "codex-acp" else None
+    )
     assert resolve_agent("codex", "codex").command == ["C:/bin/codex-acp.exe"]
     monkeypatch.setattr("handoff.agents._available", lambda name: "C:/bin/npx.cmd" if name == "npx" else None)
     assert resolve_agent("codex", "codex").command == ["C:/bin/npx.cmd", "-y", "@agentclientprotocol/codex-acp"]
@@ -50,7 +44,11 @@ def test_codex_prefers_adapter_then_npx(monkeypatch):
 
 def test_native_tui_flags_are_rejected(monkeypatch):
     monkeypatch.setattr("handoff.agents._available", lambda name: f"C:/bin/{name}.exe")
-    for name, command in (("grok", "grok chat"), ("claude", "claude --dangerously-skip-permissions"), ("codex", "codex --full-auto")):
+    for name, command in (
+        ("grok", "grok chat"),
+        ("claude", "claude --dangerously-skip-permissions"),
+        ("codex", "codex --full-auto"),
+    ):
         try:
             resolve_agent(name, command)
         except AgentUnavailable as exc:

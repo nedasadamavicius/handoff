@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import string
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -30,20 +31,38 @@ class TerminalScreen(pyte.Screen):
         self.session.write(data.encode("utf-8"))
 
 
+PYTE_COLOR_ALIASES = {"brown": "yellow"}
+TERMINAL_KEY_SEQUENCES = {
+    "enter": b"\r",
+    "backspace": b"\x7f",
+    "tab": b"\t",
+    "escape": b"\x1b",
+    "up": b"\x1b[A",
+    "down": b"\x1b[B",
+    "right": b"\x1b[C",
+    "left": b"\x1b[D",
+    "home": b"\x1b[H",
+    "end": b"\x1b[F",
+    "pageup": b"\x1b[5~",
+    "pagedown": b"\x1b[6~",
+    "delete": b"\x1b[3~",
+}
+CONTROL_KEY_PREFIX = "ctrl+"
+CONTROL_CHARACTER_MASK = 0x1F
+FIRST_PRINTABLE_CODE_POINT = 32
+
+
 def _rich_color(name: str | None) -> str | None:
     """Map a pyte colour name to something Rich can parse (or None)."""
+    name = PYTE_COLOR_ALIASES.get(name, name)
     if not name or name == "default":
         return None
-    if name == "brown":  # pyte's name for yellow
-        return "yellow"
-    if len(name) == 6 and all(c in "0123456789abcdefABCDEF" for c in name):
+    if len(name) == 6 and all(character in string.hexdigits for character in name):
         return "#" + name
     if name in _RICH_COLORS:
         return name
-    if name.startswith("bright"):
-        base = name[6:]
-        if base in _RICH_COLORS:
-            return "bright_" + base
+    if name.startswith("bright") and name[6:] in _RICH_COLORS:
+        return "bright_" + name[6:]
     return None
 
 
@@ -53,9 +72,7 @@ class TerminalPane(Widget):
     can_focus = True
     DEFAULT_CSS = "TerminalPane { width: 1fr; height: 1fr; overflow: hidden hidden; }"
 
-    def __init__(
-        self, config: AppConfig, workspace_path, *, id: str = "terminal-pane"
-    ) -> None:
+    def __init__(self, config: AppConfig, workspace_path, *, id: str = "terminal-pane") -> None:
         """Initialize the terminal pane.
 
         Args:
@@ -111,15 +128,13 @@ class TerminalPane(Widget):
             self._error = None
             self._stop_reader = threading.Event()
             self._reader_thread = threading.Thread(
-                target=self._reader_loop,
-                args=(self._pty, self._stream, self._stop_reader), daemon=True
+                target=self._reader_loop, args=(self._pty, self._stream, self._stop_reader), daemon=True
             )
             self._reader_thread.start()
             self.refresh()
             try:
                 self.focus()
             except Exception:
-                # No active app context yet
                 pass
             return True
         except (PtyUnavailable, FileNotFoundError, KeyError) as exc:
@@ -133,7 +148,7 @@ class TerminalPane(Widget):
             self.refresh()
             return False
 
-    def is_running(self) -> bool:
+    def is_process_running(self) -> bool:
         """Check if the PTY is currently running.
 
         Returns:
@@ -164,11 +179,10 @@ class TerminalPane(Widget):
     @property
     def has_live_runs(self) -> bool:
         """Compatibility property for app cleanup."""
-        return self.is_running()
+        return self.is_process_running()
 
     def snapshot_active(self) -> None:
         """No-op; exists for app-cleanup compatibility."""
-        pass
 
     def render(self) -> Text:
         """Render the terminal state as a Rich Text.
@@ -179,10 +193,9 @@ class TerminalPane(Widget):
         if not self._launched:
             if self._error:
                 return Text(self._error)
-            # Idle state: show tool list
             lines = ["Terminal • select an agent to launch"]
-            for idx, name in enumerate(self.config.tools.keys(), start=1):
-                lines.append(f"{idx}  {name}")
+            for number, name in enumerate(self.config.tools, start=1):
+                lines.append(f"{number}  {name}")
             lines.append("")
             lines.append("press 1-N to launch · Ctrl+T detach · Ctrl+K kill")
             return Text("\n".join(lines))
@@ -190,10 +203,8 @@ class TerminalPane(Widget):
         if not self._pty_running:
             if self._error:
                 return Text(self._error + "\npress 1-N to relaunch")
-            # Ended state
             return Text("session ended — press 1-N to relaunch")
 
-        # Running: render pyte screen
         if self._screen is None:
             return Text("")
 
@@ -201,8 +212,7 @@ class TerminalPane(Widget):
             cursor = (self._screen.cursor.y, self._screen.cursor.x)
             cursor_visible = self.has_focus and not self._screen.cursor.hidden
             lines = [
-                [self._screen.buffer[y][x] for x in range(self._screen.columns)]
-                for y in range(self._screen.lines)
+                [self._screen.buffer[y][x] for x in range(self._screen.columns)] for y in range(self._screen.lines)
             ]
 
         result = Text(no_wrap=True, overflow="crop")
@@ -236,41 +246,25 @@ class TerminalPane(Widget):
         if not self._pty_running:
             return
 
-        # Key translation table
-        key_map = {
-            "enter": b"\r",
-            "backspace": b"\x7f",
-            "tab": b"\t",
-            "escape": b"\x1b",
-            "up": b"\x1b[A",
-            "down": b"\x1b[B",
-            "right": b"\x1b[C",
-            "left": b"\x1b[D",
-            "home": b"\x1b[H",
-            "end": b"\x1b[F",
-            "pageup": b"\x1b[5~",
-            "pagedown": b"\x1b[6~",
-            "delete": b"\x1b[3~",
-        }
-
-        data = None
-
-        if event.key in key_map:
-            data = key_map[event.key]
-        elif event.key.startswith("ctrl+") and len(event.key) > 5:
-            # ctrl+<letter>
-            letter = event.key[5]
-            data = bytes([ord(letter) & 0x1F])
-        elif event.character and len(event.character) == 1 and ord(event.character) >= 32:
-            # Printable character
-            data = event.character.encode("utf-8")
-
+        data = self._bytes_for_key(event)
         if data is not None and self._pty is not None:
             self._pty.write(data)
             event.stop()
             event.prevent_default()
 
-    def on_resize(self, event) -> None:
+    @staticmethod
+    def _bytes_for_key(event) -> bytes | None:
+        if event.key in TERMINAL_KEY_SEQUENCES:
+            return TERMINAL_KEY_SEQUENCES[event.key]
+        if event.key.startswith(CONTROL_KEY_PREFIX) and len(event.key) > len(CONTROL_KEY_PREFIX):
+            letter = event.key[len(CONTROL_KEY_PREFIX)]
+            return bytes([ord(letter) & CONTROL_CHARACTER_MASK])
+        is_printable = (
+            event.character and len(event.character) == 1 and ord(event.character) >= FIRST_PRINTABLE_CODE_POINT
+        )
+        return event.character.encode("utf-8") if is_printable else None
+
+    def on_resize(self, _event) -> None:
         """Handle terminal resize.
 
         Args:

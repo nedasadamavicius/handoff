@@ -4,8 +4,7 @@ from pathlib import Path
 
 from handoff.claude_stream import ClaudeStreamClient, ClaudeStreamError
 
-
-SCRIPT = r'''import json, sys, time
+SCRIPT = r"""import json, sys, time
 prompt = sys.argv[-1]
 if prompt == "slow":
     time.sleep(30)
@@ -16,7 +15,7 @@ print(json.dumps({"type":"stream_event", "session_id":"s1", "event":{"delta":{"t
 print(json.dumps({"type":"stream_event", "session_id":"s1", "event":{"delta":{"type":"text_delta", "text":prompt}}}), flush=True)
 print(json.dumps({"type":"assistant", "session_id":"s1", "message":{"content":[{"type":"tool_use", "id":"t1", "name":"Read"}]}}), flush=True)
 print(json.dumps({"type":"result", "session_id":"s1", "result":prompt}), flush=True)
-'''
+"""
 
 
 def test_stream_client_turn_resume_thought_and_tool(tmp_path: Path):
@@ -27,6 +26,7 @@ def test_stream_client_turn_resume_thought_and_tool(tmp_path: Path):
     async def run():
         async def on_update(item):
             updates.append(item)
+
         client = ClaudeStreamClient([sys.executable, str(script)], tmp_path, on_update)
         await client.start()
         first = await client.prompt("one")

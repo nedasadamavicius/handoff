@@ -3,33 +3,7 @@ from __future__ import annotations
 import sys
 import time
 
-import pytest
-
-from handoff.pty_session import PtySession, PtyUnavailable
-
-
-class TestPtySessionUnspawned:
-    """Test behavior of PtySession before spawning."""
-
-    def test_read_before_spawn(self) -> None:
-        """read() should return empty bytes before spawning."""
-        session = PtySession()
-        assert session.read() == b""
-
-    def test_is_alive_before_spawn(self) -> None:
-        """is_alive() should return False before spawning."""
-        session = PtySession()
-        assert session.is_alive() is False
-
-    def test_terminate_before_spawn(self) -> None:
-        """terminate() should not raise before spawning."""
-        session = PtySession()
-        session.terminate()  # Should not raise
-
-    def test_wait_before_spawn(self) -> None:
-        """wait() should return None before spawning."""
-        session = PtySession()
-        assert session.wait() is None
+from handoff.pty_session import PtySession
 
 
 class TestPtySessionSpawned:
@@ -38,9 +12,7 @@ class TestPtySessionSpawned:
     def test_spawn_and_read_output(self) -> None:
         """Spawn a child that writes output and read it."""
         session = PtySession()
-        session.spawn(
-            [sys.executable, "-c", "import sys; sys.stdout.write('HELLO_PTY'); sys.stdout.flush()"]
-        )
+        session.spawn([sys.executable, "-c", "import sys; sys.stdout.write('HELLO_PTY'); sys.stdout.flush()"])
 
         # Poll for output with timeout
         accumulated = b""

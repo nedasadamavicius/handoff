@@ -15,9 +15,14 @@ ErrorCallback = Callable[[Exception], Awaitable[object]]
 
 
 class ACPClient:
-    def __init__(self, command: list[str], cwd: Path, on_update: Callback | None = None,
-                 on_permission: Callback | None = None,
-                 on_error: ErrorCallback | None = None):
+    def __init__(
+        self,
+        command: list[str],
+        cwd: Path,
+        on_update: Callback | None = None,
+        on_permission: Callback | None = None,
+        on_error: ErrorCallback | None = None,
+    ):
         self.command, self.cwd = command, Path(cwd)
         self.on_update, self.on_permission = on_update, on_permission
         self.on_error = on_error
@@ -40,18 +45,26 @@ class ACPClient:
             return self
         try:
             self.process = await asyncio.create_subprocess_exec(
-                *self.command, cwd=str(self.cwd), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                *self.command,
+                cwd=str(self.cwd),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             self._reader_task = asyncio.create_task(self._read_stdout())
             self._stderr_task = asyncio.create_task(self._read_stderr())
-            version = await self._request("initialize", {
-                "protocolVersion": 1, "clientCapabilities": {},
-                "clientInfo": {"name": "handoff", "version": "0.1.0"},
-            }, timeout=10)
+            version = await self._request(
+                "initialize",
+                {
+                    "protocolVersion": 1,
+                    "clientCapabilities": {},
+                    "clientInfo": {"name": "handoff", "version": "0.1.0"},
+                },
+                timeout=10,
+            )
             if version.get("protocolVersion") != 1:
                 raise ACPError(f"unsupported ACP protocol version: {version.get('protocolVersion')!r}")
-            result = await self._request("session/new", {
-                "cwd": str(self.cwd.absolute()), "mcpServers": []}, timeout=10)
+            result = await self._request("session/new", {"cwd": str(self.cwd.absolute()), "mcpServers": []}, timeout=10)
             self.session_id = result.get("sessionId")
             if not self.session_id:
                 raise ACPError("session/new response did not contain sessionId")
@@ -66,10 +79,13 @@ class ACPClient:
         if self._turn_lock.locked():
             raise ACPError("a prompt turn is already in progress")
         async with self._turn_lock:
-            return await self._request("session/prompt", {
-                "sessionId": self.session_id,
-                "prompt": [{"type": "text", "text": text}],
-            })
+            return await self._request(
+                "session/prompt",
+                {
+                    "sessionId": self.session_id,
+                    "prompt": [{"type": "text", "text": text}],
+                },
+            )
 
     async def cancel(self):
         if self.process is None or self.session_id is None:
@@ -194,8 +210,9 @@ class ACPClient:
                 self._permission_tasks.add(task)
                 task.add_done_callback(self._permission_tasks.discard)
         elif "id" in message:
-            await self._send({"jsonrpc": "2.0", "id": message["id"],
-                              "error": {"code": -32601, "message": "Method not found"}})
+            await self._send(
+                {"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601, "message": "Method not found"}}
+            )
 
     async def _answer_permission(self, ident: int, params: dict):
         result = {"outcome": {"outcome": "cancelled"}}

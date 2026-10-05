@@ -38,21 +38,15 @@ class PtySession:
         if sys.platform == "win32":
             try:
                 from winpty import PtyProcess
-            except ImportError:
-                raise PtyUnavailable(
-                    "PtyProcess not available. Install pywinpty: pip install pywinpty"
-                )
+            except ImportError as error:
+                raise PtyUnavailable("PtyProcess not available. Install pywinpty: pip install pywinpty") from error
         else:
             try:
                 from ptyprocess import PtyProcess
-            except ImportError:
-                raise PtyUnavailable(
-                    "PtyProcess not available. Install ptyprocess: pip install ptyprocess"
-                )
+            except ImportError as error:
+                raise PtyUnavailable("PtyProcess not available. Install ptyprocess: pip install ptyprocess") from error
 
-        self._proc = PtyProcess.spawn(
-            argv, cwd=cwd, env=env, dimensions=(rows, cols)
-        )
+        self._proc = PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=(rows, cols))
 
     def read(self) -> bytes:
         """Read available output from the PTY.

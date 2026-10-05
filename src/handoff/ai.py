@@ -41,7 +41,9 @@ Markdown list of the next concrete work items. Include unresolved/open items onl
 """
 
 
-def draft_handoff(config: AppConfig, workspace: Workspace, files_opened: list[str], tools_launched: list[str]) -> str | None:
+def draft_handoff(
+    config: AppConfig, workspace: Workspace, files_opened: list[str], tools_launched: list[str]
+) -> str | None:
     if not config.ai_command:
         return None
     prompt = build_handoff_prompt(workspace, files_opened, tools_launched)

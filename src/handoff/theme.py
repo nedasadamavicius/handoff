@@ -8,6 +8,7 @@ from textual.theme import Theme
 
 if TYPE_CHECKING:
     from textual.app import App
+
     from handoff.config import AppConfig
 
 
@@ -29,8 +30,16 @@ GRAPHITE_CRIMSON = Theme(
 BUNDLED_THEMES: list[Theme] = [GRAPHITE_CRIMSON]
 
 _THEME_STR_FIELDS = {
-    "primary", "secondary", "accent", "warning", "success", "error",
-    "background", "surface", "panel", "foreground",
+    "primary",
+    "secondary",
+    "accent",
+    "warning",
+    "success",
+    "error",
+    "background",
+    "surface",
+    "panel",
+    "foreground",
 }
 
 

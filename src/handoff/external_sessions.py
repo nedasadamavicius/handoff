@@ -16,7 +16,6 @@ from typing import Any
 
 from handoff.session_runner import without_mux_markers
 
-
 IS_WINDOWS = sys.platform == "win32"
 LIVE_STATES = {"starting", "running"}
 MUX_PROGRAM = "psmux" if IS_WINDOWS else "tmux"
@@ -32,7 +31,9 @@ def parse_command(command: str | list[str]) -> list[str]:
 def validate_shim(argv: list[str]) -> None:
     if Path(argv[0]).suffix.lower() in {".cmd", ".bat"}:
         if any(character in '%!&|<>^"\n\r()' for arg in argv for character in arg):
-            raise ValueError(".cmd/.bat commands cannot contain shell metacharacters; configure the native executable instead.")
+            raise ValueError(
+                ".cmd/.bat commands cannot contain shell metacharacters; configure the native executable instead."
+            )
 
 
 class WindowsProcessHandle:
@@ -282,7 +283,11 @@ def current_mux_session(mux: str) -> str:
         )
     found = subprocess.run(
         [mux, "display-message", "-p", "#{session_name}"],
-        capture_output=True, text=True, timeout=5, **hidden_run_kwargs(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+        **hidden_run_kwargs(),
     )
     name = found.stdout.strip()
     if found.returncode or not name:
@@ -350,14 +355,25 @@ class SessionManager:
                         f"Could not find {MUX_PROGRAM} on PATH. Agent sessions run as multiplexer windows."
                     )
             session = ExternalSession(
-                name, argv, self.workspace, window_name=self._window_name(name), backend=backend_name,
+                name,
+                argv,
+                self.workspace,
+                window_name=self._window_name(name),
+                backend=backend_name,
             )
             request = self.directory / f"{session.ident}.json"
-            request.write_text(json.dumps({
-                "argv": argv, "workspace": str(self.workspace),
-                "status_path": str(self._status_path(session)), "label": session.label,
-                "backend": backend_name,
-            }), encoding="utf-8")
+            request.write_text(
+                json.dumps(
+                    {
+                        "argv": argv,
+                        "workspace": str(self.workspace),
+                        "status_path": str(self._status_path(session)),
+                        "label": session.label,
+                        "backend": backend_name,
+                    }
+                ),
+                encoding="utf-8",
+            )
             helper = [sys.executable, str(Path(__file__).with_name("session_runner.py")), str(request)]
             try:
                 if backend_name == "console":
@@ -390,7 +406,11 @@ class SessionManager:
         session.mux_session = current_mux_session(mux)
         created = subprocess.run(
             self._agent_window_command(mux, session, helper),
-            capture_output=True, text=True, timeout=15, **hidden_run_kwargs(),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+            **hidden_run_kwargs(),
         )
         if created.returncode:
             detail = (created.stderr or created.stdout or "multiplexer rejected the window").strip()
@@ -415,7 +435,11 @@ class SessionManager:
             return
         renamed = subprocess.run(
             [mux, "rename-window", f"HO: {self.workspace.name or 'workspace'}"],
-            capture_output=True, text=True, timeout=5, **hidden_run_kwargs(),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            **hidden_run_kwargs(),
         )
         if renamed.returncode:
             detail = (renamed.stderr or renamed.stdout or "Could not rename the Handoff window").strip()
@@ -468,7 +492,9 @@ class SessionManager:
                     continue
                 if session.pid and session.handle is None:
                     try:
-                        session.handle = WindowsProcessHandle(session.pid) if IS_WINDOWS else PosixProcessHandle(session.pid)
+                        session.handle = (
+                            WindowsProcessHandle(session.pid) if IS_WINDOWS else PosixProcessHandle(session.pid)
+                        )
                     except OSError as exc:
                         # ERROR_INVALID_PARAMETER means the process no longer exists.
                         if getattr(exc, "winerror", None) == 87:
@@ -518,10 +544,18 @@ class SessionManager:
                 return
             if not session.terminal or not session.mux_session:
                 raise RuntimeError("Session has no multiplexer window")
-            target = session.window_id if session.window_id and session.window_id.startswith("@") else f"{session.mux_session}:{session.label}"
+            target = (
+                session.window_id
+                if session.window_id and session.window_id.startswith("@")
+                else f"{session.mux_session}:{session.label}"
+            )
             selected = subprocess.run(
                 [session.terminal, "switch-client", "-t", target],
-                capture_output=True, text=True, timeout=5, **hidden_run_kwargs(),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+                **hidden_run_kwargs(),
             )
             if selected.returncode:
                 detail = (selected.stderr or selected.stdout or "Could not select the multiplexer window").strip()
@@ -536,11 +570,18 @@ class SessionManager:
         if IS_WINDOWS:
             return subprocess.run(
                 ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
-                capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         return subprocess.run(
             ["kill", "-KILL", str(pid)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
         )
 
     def stop(self, session: ExternalSession) -> None:
@@ -550,9 +591,7 @@ class SessionManager:
                 raise RuntimeError("Session has already exited")
             # Kill the console launcher so its helper, agent, and conhost all stop.
             launcher_alive = (
-                session.backend == "console"
-                and session.process is not None
-                and session.process.poll() is None
+                session.backend == "console" and session.process is not None and session.process.poll() is None
             )
             if launcher_alive:
                 target = session.process.pid
