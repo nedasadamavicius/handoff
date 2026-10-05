@@ -151,7 +151,7 @@ def test_codex_tool_creates_agents_memory_file(tmp_path: Path) -> None:
     assert "Read `.handoff/WORKSPACE.md`" in text
     assert "Treat it as the live handoff ledger" in text
     assert "Before handing control back to the user after material work" in text
-    assert "only the files that matter" in text
+    assert "Tag by path, never by number" in text
     assert "Do not list agent process steps" in text
     assert "running tests" in text
     assert "Do not spend time expanding the NEXT.md section" in text
@@ -746,3 +746,61 @@ def test_finalize_week_draft_marks_as_finalized(tmp_path: Path) -> None:
     pending = find_pending_weeks(days_dir, weeks_dir)
 
     assert (2026, 25) not in pending
+
+
+def test_source_tags_resolve_paths_to_numbers_and_drop_unknown() -> None:
+    from handoff.source_tags import number_files, resolve_source_tags, strip_numeric_tags
+
+    files = number_files(["src/b.py", "./src/a.py", "docs/"])
+    assert files == ["docs/", "src/a.py", "src/b.py"]
+    text, dropped = resolve_source_tags(
+        "- Keyed per slot [src\\b.py][src/a.py]\n- Decision, no files\n- Guess [9] [nope/x.py] [x]\n- In dir [docs/guide.md]",
+        files,
+    )
+    assert text.splitlines()[0] == "- Keyed per slot [3][2]"
+    assert text.splitlines()[1] == "- Decision, no files"
+    assert text.splitlines()[2] == "- Guess [x]"
+    assert text.splitlines()[3] == "- In dir [1]"
+    assert dropped == ["9", "nope/x.py"]
+    # renumbering keeps tags correct because they are resolved from the list in hand
+    shifted, _ = resolve_source_tags("- A [src/a.py]", number_files(["aaa.py", "src/a.py"]))
+    assert shifted == "- A [2]"
+    assert strip_numeric_tags("- A [1][2]\n- B") == "- A\n- B"
+
+
+def test_source_tags_survive_draft_parsing() -> None:
+    draft = "## LAST.md\n\n### Summary\n\nS\n\n### Completed\n\n- Did it [src/a.py][src/b.py]\n\n### Open Issues\n\n- None\n\n## NEXT.md\n\n- Go"
+    _, done, _ = parse_last_sections(parse_combined_draft(draft).last)
+    assert done == "- Did it [src/a.py][src/b.py]"
+
+
+def test_memory_template_flag_and_migration(tmp_path: Path) -> None:
+    from handoff.workspace import memory_file_migration
+
+    workspace = current_directory_workspace(tmp_path)
+    ensure_tool_file(workspace, "claude", "claude", source_tags=False)
+    legacy = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "Tag by path" not in legacy
+    path, new_text = memory_file_migration(workspace, "claude", "claude")
+    assert "Tag by path, never by number" in new_text and "\u2014" not in new_text
+    (tmp_path / "CLAUDE.md").write_text(legacy + "\ncustom", encoding="utf-8")
+    assert memory_file_migration(workspace, "claude", "claude") is None
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    ensure_tool_file(current_directory_workspace(fresh), "codex", "codex")
+    assert "Tag by path, never by number" in (fresh / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_auto_migrate_upgrades_only_untouched_legacy_files(tmp_path: Path) -> None:
+    from handoff.workspace import auto_migrate_memory_files
+
+    workspace = current_directory_workspace(tmp_path)
+    ensure_tool_file(workspace, "claude", "claude", source_tags=False)
+    ensure_tool_file(workspace, "codex", "codex", source_tags=False)
+    (tmp_path / "AGENTS.md").write_text("custom", encoding="utf-8")
+    done = auto_migrate_memory_files(workspace, {"claude": "claude", "codex": "codex"})
+    assert [p.name for p in done] == ["CLAUDE.md"]
+    assert "Tag by path" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == "custom"
+    assert auto_migrate_memory_files(workspace, {"claude": "claude"}) == []

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from handoff.documents import render_last_markdown, render_next_markdown
+from handoff.source_tags import strip_numeric_tags
 from handoff.session import render_session_log, session_filename, update_day_log
 from handoff.workspace import Workspace
 
@@ -56,7 +57,8 @@ def save_workspace_handoff(
         ended_at=ended_at,
         session_file=session_path.name,
         summary=fields["summary"],
-        completed=fields["done"],
+        # [n] tags index this session's file list; the day log merges sessions.
+        completed=strip_numeric_tags(fields["done"]),
         open_issues=fields["open"],
     )
     workspace.last_file.write_text(last_text.rstrip() + "\n", encoding="utf-8")

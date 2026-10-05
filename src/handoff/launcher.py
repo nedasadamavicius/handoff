@@ -16,7 +16,7 @@ CODEX_FINALIZE_PROMPT = (
     "Update .handoff/DRAFT.md from the work completed in this Codex session. "
     "Use the required handoff format from AGENTS.md. "
     "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'. "
-    "Complete LAST.md with what changed, affected files, relevant git diff details, and open issues. "
+    "Complete LAST.md with what changed, relevant git diff details, and open issues. "
     "In Completed, include shipped changes, decisions, fixes, or artifacts created. "
     "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, or opening files; mention only the concrete outcome those steps produced. "
     "Keep NEXT.md concise and include only durable next actions. "
@@ -27,12 +27,23 @@ CLAUDE_FINALIZE_PROMPT = (
     "Update .handoff/DRAFT.md from the work completed in this Claude session. "
     "Use the required handoff format from CLAUDE.md. "
     "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'. "
-    "Complete LAST.md with what changed, affected files, relevant git diff details, and open issues. "
+    "Complete LAST.md with what changed, relevant git diff details, and open issues. "
     "In Completed, include shipped changes, decisions, fixes, or artifacts created. "
     "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, or opening files; mention only the concrete outcome those steps produced. "
     "Keep NEXT.md concise and include only durable next actions. "
     "Do not make unrelated code changes."
 )
+
+
+SOURCE_TAG_PROMPT = (
+    "In Completed, write one-line conceptual bullets with no file or function names, "
+    "and end each with the repo-relative paths of the files it affected in square brackets, "
+    "e.g. [src/foo.ts]. Tag by path, never by number. "
+)
+
+
+def _with_source_tags(prompt: str, source_tags: bool) -> str:
+    return prompt.replace("Complete LAST.md with what changed, relevant", "Complete LAST.md with what changed, affected files, relevant") if not source_tags else SOURCE_TAG_PROMPT + prompt
 
 
 NEXT_AUDIT_PROMPT = (
@@ -123,7 +134,7 @@ def tool_command(config: AppConfig, tool_name: str) -> str:
     return template
 
 
-def codex_finalize_command(tool_name: str, command: str) -> str | None:
+def codex_finalize_command(tool_name: str, command: str, source_tags: bool = True) -> str | None:
     combined = (tool_name + " " + command).lower()
     if "codex" not in combined:
         return None
@@ -133,10 +144,10 @@ def codex_finalize_command(tool_name: str, command: str) -> str | None:
     executable = parts[0]
     if "codex" not in Path(executable).name.lower():
         return None
-    return subprocess.list2cmdline([executable, "exec", "resume", "--last", CODEX_FINALIZE_PROMPT])
+    return subprocess.list2cmdline([executable, "exec", "resume", "--last", _with_source_tags(CODEX_FINALIZE_PROMPT, source_tags)])
 
 
-def claude_finalize_command(tool_name: str, command: str) -> str | None:
+def claude_finalize_command(tool_name: str, command: str, source_tags: bool = True) -> str | None:
     combined = (tool_name + " " + command).lower()
     if "claude" not in combined:
         return None
@@ -147,7 +158,7 @@ def claude_finalize_command(tool_name: str, command: str) -> str | None:
     if "claude" not in Path(executable).name.lower():
         return None
     return subprocess.list2cmdline([
-        executable, "--continue", "-p", CLAUDE_FINALIZE_PROMPT,
+        executable, "--continue", "-p", _with_source_tags(CLAUDE_FINALIZE_PROMPT, source_tags),
         "--allowedTools", "Write(.handoff/*),Edit(.handoff/*)",
     ])
 

@@ -32,6 +32,7 @@ from handoff.documents import (
     strip_yaml_frontmatter,
 )
 from handoff.git import changed_files_from_status, git_status_short
+from handoff.source_tags import format_numbered, number_files, resolve_source_tags
 from handoff.launcher import (
     LaunchError,
     editor_command,
@@ -674,7 +675,7 @@ class WorkspaceShell(App):
             return
         name = tools[index]
         command = self.config.tools[name]
-        ensure_tool_file(self.workspace, name, command)
+        ensure_tool_file(self.workspace, name, command, self.config.source_tags)
         self.action_tool()
         if self.session_widget is None:
             return
@@ -980,8 +981,13 @@ class WorkspaceShell(App):
         kind = workspace_type(workspace) or "regular"
         git_status = git_status_short(workspace.path) if kind == "code" else ""
         changed_files = changed_files_from_status(git_status)
+        if self.config.source_tags:
+            changed_files = number_files(changed_files)
+            files_block = format_numbered(changed_files) or "- None detected"
+        else:
+            files_block = chr(10).join(f"- {item}" for item in changed_files) or "- None detected"
         evidence = (
-            f"Files changed:\n{chr(10).join(f'- {item}' for item in changed_files) or '- None detected'}\n\n"
+            f"Files changed:\n{files_block}\n\n"
             f"Tools launched:\n{chr(10).join(f'- {item}' for item in tools) or '- None tracked'}\n\n"
             f"Git status:\n{git_status or 'No changes detected.'}"
             if kind == "code"
@@ -994,6 +1000,10 @@ class WorkspaceShell(App):
         )
         draft = self.run_ledger.merged_draft(next_template)
         summary, done, open_items = parse_last_sections(draft.last)
+        if self.config.source_tags:
+            done, dropped = resolve_source_tags(done, changed_files)
+            if dropped:
+                self.notify(f"Dropped source tags not in changed files: {', '.join(dropped)}", severity="warning", timeout=8)
         next_text = draft.next
         self.push_screen(
             HandoffScreen(workspace.name, summary, done, open_items, next_text, evidence),

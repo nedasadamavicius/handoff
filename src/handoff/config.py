@@ -31,6 +31,7 @@ class AppConfig:
     tools: dict[str, str] = field(default_factory=lambda: {"grok": "grok", "codex": "codex", "claude": "claude"})
     ai_command: str | None = None
     theme: str = "graphite-crimson"
+    source_tags: bool = True
 
     @property
     def workspaces_dir(self) -> Path:
@@ -56,6 +57,7 @@ def default_config_data(root: Path = DEFAULT_ROOT) -> dict[str, Any]:
         "tools": {"grok": "grok", "codex": "codex", "claude": "claude"},
         "ai_command": None,
         "theme": "graphite-crimson",
+        "source_tags": True,
     }
 
 
@@ -95,4 +97,5 @@ def load_config(root: Path = DEFAULT_ROOT) -> AppConfig:
         tools=tools,
         ai_command=raw.get("ai_command"),
         theme=raw.get("theme") or "graphite-crimson",
+        source_tags=bool(raw.get("source_tags", True)),
     )
