@@ -1,11 +1,5 @@
 Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
 
-## Priority
-
-Handle this before other work, without waiting to be asked. Remove this section once it ships.
-
-- Include committed work in the handoff's changed-files list. The Evidence "Files changed" list is built only from `git status` (`changed_files_from_status` in `src/handoff/git.py`), so files a session already committed are missing. Their path source tags then get dropped as "not in changed files", leaving Completed bullets untagged. Also list the files changed by commits made since the session started (for example `git diff --name-only <session-start commit>..HEAD`, or `git log --since=<session start> --name-only`), merge them with uncommitted files, and number them together. Add tests.
-
 ## Git
 
 Use conventional commit messages (`type(scope): description`). Use only ASCII characters in commit messages. Never add a `Co-Authored-By` trailer to commits.

@@ -28,6 +28,7 @@ from handoff.documents import (
     strip_handoff_frontmatter,
 )
 from handoff.external_sessions import SessionManager
+from handoff.git import head_commit
 from handoff.launcher import (
     LaunchError,
     editor_command,
@@ -302,6 +303,7 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         self.workspace = workspace
         self.active_file: Path | None = None
         self.started_at = now_local()
+        self.start_commit = head_commit(workspace.path)
         self.files_opened: list[str] = []
         self.tools_launched: list[str] = []
         self.tool_picker_open = False

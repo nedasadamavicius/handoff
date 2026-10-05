@@ -8,7 +8,7 @@ from pathlib import Path
 from handoff.documents import (
     is_markdown_file,
 )
-from handoff.git import changed_files_from_status, git_status_short
+from handoff.git import committed_files_since, git_status_short, session_changed_files
 from handoff.handoff import draft_has_content, parse_last_sections
 from handoff.note_sync import SyncReport, sync_for_repo
 from handoff.session import now_local
@@ -143,7 +143,10 @@ class HandoffFlowMixin:
         tools = [*self.tools_launched, *self.run_ledger.tools_launched]
         kind = workspace_type(workspace) or "regular"
         git_status = git_status_short(workspace.path) if kind == "code" else ""
-        changed_files = changed_files_from_status(git_status)
+        committed = (
+            committed_files_since(workspace.path, self.start_commit, self.started_at) if kind == "code" else []
+        )
+        changed_files = session_changed_files(git_status, committed)
         if self.config.source_tags:
             changed_files = number_files(changed_files)
             files_block = format_numbered(changed_files) or "- None detected"
