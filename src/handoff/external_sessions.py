@@ -3,7 +3,6 @@
 import ctypes
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -14,17 +13,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from handoff.launcher import executable_stem, split_command
 from handoff.session_runner import without_mux_markers
 
 IS_WINDOWS = sys.platform == "win32"
 LIVE_STATES = {"starting", "running"}
-MUX_PROGRAM = "psmux" if IS_WINDOWS else "tmux"
+
+
+def mux_program() -> str:
+    return "psmux" if IS_WINDOWS else "tmux"
 
 
 def parse_command(command: str | list[str]) -> list[str]:
     if isinstance(command, list):
         return list(command)
-    parts = shlex.split(command, posix=False)
+    parts = split_command(command)
     return [part[1:-1] if len(part) >= 2 and part[0] == part[-1] == '"' else part for part in parts]
 
 
@@ -102,7 +105,7 @@ def uses_console_backend(name: str, argv: list[str]) -> bool:
         return False
     if name.strip().lower() == "grok":
         return True
-    return Path(argv[0]).stem.lower() == "grok"
+    return executable_stem(argv[0]) == "grok"
 
 
 class _Rect(ctypes.Structure):
@@ -278,7 +281,7 @@ def current_mux_session(mux: str) -> str:
         return named
     if not os.environ.get("TMUX"):
         raise RuntimeError(
-            f"Handoff is not inside {MUX_PROGRAM}. Start it from a {MUX_PROGRAM} session "
+            f"Handoff is not inside {mux_program()}. Start it from a {mux_program()} session "
             "so this repository's agents stay in this terminal."
         )
     found = subprocess.run(
@@ -349,10 +352,10 @@ class SessionManager:
             backend_name = "console" if uses_console_backend(name, argv) else "mux"
             mux = None
             if backend_name == "mux":
-                mux = shutil.which(MUX_PROGRAM)
+                mux = shutil.which(mux_program())
                 if not mux:
                     raise FileNotFoundError(
-                        f"Could not find {MUX_PROGRAM} on PATH. Agent sessions run as multiplexer windows."
+                        f"Could not find {mux_program()} on PATH. Agent sessions run as multiplexer windows."
                     )
             session = ExternalSession(
                 name,
@@ -430,7 +433,7 @@ class SessionManager:
 
     def rename_handoff_window(self) -> None:
         """Give the current workspace window a short, recognizable name."""
-        mux = shutil.which(MUX_PROGRAM)
+        mux = shutil.which(mux_program())
         if not mux or not (os.environ.get("PSMUX_SESSION") or os.environ.get("TMUX")):
             return
         renamed = subprocess.run(

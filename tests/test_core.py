@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
 import yaml
 from textual.app import App
 from textual.widgets import Input, MarkdownViewer, TextArea
@@ -24,10 +26,12 @@ from handoff.launcher import (
     LaunchError,
     codex_finalize_command,
     finalize_prompt,
+    format_command,
     is_terminal_editor,
     next_audit_command,
     run_command,
     spawn_detached,
+    split_command,
 )
 from handoff.memory_files import ensure_tool_file, ensure_tool_files
 from handoff.session import parse_session_file, render_handoff
@@ -215,6 +219,13 @@ def test_run_command_resolves_windows_command_wrapper(tmp_path: Path, monkeypatc
 
     assert run_command(["code", "--wait", "notes.md"], cwd=tmp_path) == 0
     assert calls == [([wrapper, "--wait", "notes.md"], str(tmp_path), False)]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX quoting")
+def test_commands_split_quoted_arguments_and_keep_file_paths_whole() -> None:
+    assert split_command('python -c "import time; time.sleep(1)"') == ["python", "-c", "import time; time.sleep(1)"]
+    path = Path("/notes/it's a note.md")
+    assert format_command("nvim {file}", path) == ["nvim", str(path)]
 
 
 def test_is_terminal_editor_distinguishes_tui_and_gui_editors() -> None:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+from handoff.launcher import split_command
 
 
 class AgentUnavailable(RuntimeError):
@@ -16,7 +17,7 @@ class AgentAdapter:
     memory_file: str
 
     def matches(self, tool_name: str, command: str) -> bool:
-        parts = shlex.split(command, posix=False)
+        parts = split_command(command)
         if not parts:
             return False
         names = {_executable_name(parts[0]), tool_name.lower()}
@@ -87,7 +88,7 @@ def resolve_agent(name: str, command: str) -> AgentLaunch:
     adapter = get_adapter(name, command)
     if adapter is None:
         raise AgentUnavailable(f"Unsupported agent command for {name!r}: {command!r}")
-    parts = shlex.split(command, posix=False)
+    parts = split_command(command)
     executable = parts[0].strip('"') if parts else ""
     executable_name = _executable_name(executable) if executable else ""
     if adapter.key == "codex" and executable_name == "codex":

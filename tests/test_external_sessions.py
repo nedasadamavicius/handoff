@@ -446,7 +446,6 @@ def test_posix_grok_stays_in_tmux(tmp_path, monkeypatch):
     monkeypatch.setenv("TMUX", "/tmp/tmux-1/default,1,0")
     monkeypatch.delenv("PSMUX_SESSION", raising=False)
     monkeypatch.setattr(backend, "IS_WINDOWS", False)
-    monkeypatch.setattr(backend, "MUX_PROGRAM", "tmux")
     monkeypatch.setattr(backend.shutil, "which", lambda name: "/usr/bin/tmux" if name == "tmux" else "/usr/bin/grok")
 
     def fake_run(args, **kwargs):
@@ -468,7 +467,6 @@ def test_posix_launch_uses_tmux_and_kills_helper_not_the_server(tmp_path, monkey
     monkeypatch.setenv("TMUX", "/tmp/tmux-1/default,1,0")
     monkeypatch.delenv("PSMUX_SESSION", raising=False)
     monkeypatch.setattr(backend, "IS_WINDOWS", False)
-    monkeypatch.setattr(backend, "MUX_PROGRAM", "tmux")
     monkeypatch.setattr(backend.shutil, "which", lambda name: "/usr/bin/tmux" if name == "tmux" else "/usr/bin/agent")
     handle = Mock()
     handle.alive.return_value = True

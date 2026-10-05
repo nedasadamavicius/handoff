@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shlex
 import string
 import threading
 import time
@@ -11,6 +10,7 @@ from rich.style import Style
 from rich.text import Text
 from textual.widget import Widget
 
+from handoff.launcher import split_command
 from handoff.pty_session import PtySession, PtyUnavailable
 
 if TYPE_CHECKING:
@@ -115,7 +115,7 @@ class TerminalPane(Widget):
 
         try:
             command = self.config.tools[name]
-            argv = shlex.split(command, posix=False)
+            argv = split_command(command)
 
             self._pty = PtySession()
             self._pty.spawn(argv, cwd=self._cwd, rows=self._rows, cols=self._cols)

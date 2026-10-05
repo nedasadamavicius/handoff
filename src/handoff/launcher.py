@@ -3,9 +3,24 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from handoff.config import AppConfig
+
+
+def split_command(command: str) -> list[str]:
+    """Split a configured command line the way this platform's shell would.
+
+    Windows keeps backslashes in paths, so it uses non-POSIX rules; elsewhere
+    POSIX rules strip quotes so `-c "a b"` arrives as one unquoted argument.
+    """
+    return shlex.split(command, posix=sys.platform != "win32")
+
+
+def executable_stem(value: str) -> str:
+    """Lowercase program name without extension; accepts Windows paths on any platform."""
+    return Path(value.strip('"').replace("\\", "/")).stem.lower()
 
 
 class LaunchError(RuntimeError):
@@ -74,10 +89,11 @@ def next_audit_command(config: AppConfig) -> list[str]:
 
 
 def format_command(template: str, file: Path | None = None) -> list[str]:
-    value = template
-    if file is not None:
-        value = value.replace("{file}", str(file))
-    return shlex.split(value, posix=False)
+    # Split before substituting so quotes or spaces in the path stay inside one argument.
+    parts = split_command(template)
+    if file is None:
+        return parts
+    return [part.replace("{file}", str(file)) for part in parts]
 
 
 def editor_command(config: AppConfig, file: Path, editor_name: str | None = None) -> list[str]:
@@ -109,7 +125,7 @@ def is_terminal_editor(command: list[str]) -> bool:
     """True when the editor runs inside this terminal and the TUI must hand it the screen."""
     if not command:
         return False
-    name = Path(command[0]).stem.lower()
+    name = executable_stem(command[0])
     if name in {"emacs", "emacsclient"}:
         return any(arg in {"-nw", "-t", "--tty", "--no-window-system"} for arg in command[1:])
     return name in TERMINAL_EDITORS

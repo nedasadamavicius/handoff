@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
+from handoff.launcher import split_command
 from handoff.workspace import Workspace
 
 TOOL_MEMORY_FILES: dict[str, str] = {
@@ -110,7 +110,7 @@ def memory_template(source_tags: bool = True) -> str:
 
 
 def _memory_filename(tool_name: str, command: str) -> str | None:
-    parts = shlex.split(command, posix=False)
+    parts = split_command(command)
     names = {tool_name.lower()}
     if parts:
         names.add(Path(parts[0].strip('"')).name.lower())
