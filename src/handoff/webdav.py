@@ -15,6 +15,8 @@ from xml.etree import ElementTree
 TOKEN_FILENAME = "webdav.token"
 PASSWORD_ENVIRONMENT_VARIABLE = "HANDOFF_WEBDAV_PASSWORD"
 REQUEST_TIMEOUT_SECONDS = 15.0
+USER_AGENT = "handoff-sync (+https://github.com/nedasadamavicius/handoff)"
+ERROR_SNIPPET_LENGTH = 200
 HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_NO_CONTENT = 204
@@ -95,6 +97,7 @@ class WebDAVClient:
     ) -> tuple[int, dict[str, str], bytes]:
         http_request = urllib.request.Request(self._url(path), data=data, method=method)
         http_request.add_header("Authorization", self._auth)
+        http_request.add_header("User-Agent", USER_AGENT)
         for header_name, header_value in (headers or {}).items():
             http_request.add_header(header_name, header_value)
         try:
@@ -102,8 +105,11 @@ class WebDAVClient:
                 return response.status, _lowercase_headers(response.headers), response.read()
         except urllib.error.HTTPError as error:
             body = error.read()
-            if error.code in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+            if error.code == HTTP_UNAUTHORIZED:
                 raise AuthError("Authentication failed; run `handoff sync login`") from error
+            if error.code == HTTP_FORBIDDEN:
+                snippet = body[:ERROR_SNIPPET_LENGTH].decode("utf-8", errors="replace").strip()
+                raise SyncError(f"Server refused the request (403), not a login problem: {snippet}") from error
             if error.code == HTTP_PRECONDITION_FAILED:
                 raise PreconditionFailed(path) from error
             return error.code, _lowercase_headers(error.headers), body
