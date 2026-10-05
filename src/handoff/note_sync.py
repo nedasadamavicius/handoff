@@ -1,9 +1,9 @@
 """Two-way sync of a workspace's handoff notes with a Nextcloud/WebDAV folder.
 
 Remote layout: ``<server>/remote.php/dav/files/<user>/<folder>/<repository-id>/<file>``.
-Only handoff notes are synced (never DRAFT.md). Deletions are never propagated, and
-when both sides changed a file the remote copy is saved beside it as
-``<name>.conflict<ext>`` and nothing is overwritten.
+Only handoff notes are synced (never DRAFT.md). Deletions are never propagated. When
+both sides changed a file the two versions are combined (see ``note_merge``), the
+result is pushed so every machine converges, and the user reviews it in place.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from handoff.git import repository_id
+from handoff.note_merge import combine_versions, has_merge_markers
 from handoff.webdav import (
     PreconditionFailed,
     SyncError,
@@ -28,7 +29,6 @@ TOP_LEVEL_NOTES = ("WORKSPACE.md", "LAST.md", "NEXT.md", "WORKLOG.md")
 NOTE_DIRECTORIES = ("sessions", "days", "weeks")
 STATE_FILENAME = ".sync-state.json"
 DEADLINE_SECONDS = 60.0
-CONFLICT_MARKER = ".conflict"
 
 SyncState = dict[str, dict[str, str]]
 
@@ -37,21 +37,20 @@ SyncState = dict[str, dict[str, str]]
 class SyncReport:
     pushed: list[str] = field(default_factory=list)
     pulled: list[str] = field(default_factory=list)
-    conflicts: list[str] = field(default_factory=list)
+    merged: list[str] = field(default_factory=list)
+    needs_review: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         parts = [f"{len(self.pushed)} pushed", f"{len(self.pulled)} pulled"]
-        if self.conflicts:
-            parts.append(f"{len(self.conflicts)} conflict(s): {', '.join(self.conflicts)}")
+        if self.merged:
+            parts.append(f"{len(self.merged)} merged")
+        if self.needs_review:
+            parts.append(f"review markers in {', '.join(self.needs_review)}")
         return ", ".join(parts)
 
 
 def content_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def is_conflict_copy(filename: str) -> bool:
-    return CONFLICT_MARKER in filename
 
 
 def local_notes(meta: Path) -> dict[str, bytes]:
@@ -64,7 +63,7 @@ def local_notes(meta: Path) -> dict[str, bytes]:
         if not (meta / directory).is_dir():
             continue
         for path in (meta / directory).glob("*.md"):
-            if path.is_file() and not is_conflict_copy(path.name):
+            if path.is_file():
                 notes[f"{directory}/{path.name}"] = path.read_bytes()
     return notes
 
@@ -80,6 +79,15 @@ def load_sync_state(meta: Path) -> SyncState:
 def has_unsynced(meta: Path) -> bool:
     state = load_sync_state(meta)
     return any(state.get(path, {}).get("hash") != content_hash(data) for path, data in local_notes(meta).items())
+
+
+def notes_needing_review(meta: Path) -> list[str]:
+    """Notes that still contain merge markers from a combined edit."""
+    return sorted(
+        relative_path
+        for relative_path, data in local_notes(meta).items()
+        if has_merge_markers(data.decode("utf-8", errors="replace"))
+    )
 
 
 class WorkspaceSync:
@@ -115,6 +123,7 @@ class WorkspaceSync:
                 self._reconcile(relative_path, local.get(relative_path), remote_etags.get(relative_path))
         finally:
             (self.meta / STATE_FILENAME).write_text(json.dumps(self.state, indent=1), encoding="utf-8")
+        self.report.needs_review = notes_needing_review(self.meta)
         return self.report
 
     def _checkpoint(self, message: str) -> None:
@@ -141,7 +150,7 @@ class WorkspaceSync:
             self._checkpoint("Listing remote files")
             entries = self.client.list_directory(self._remote_path(directory).rstrip("/"))
             for name, (etag, is_directory) in entries.items():
-                if not is_directory and name.endswith(".md") and not is_conflict_copy(name):
+                if not is_directory and name.endswith(".md"):
                     etags[f"{directory}/{name}" if directory else name] = etag
         return etags
 
@@ -156,33 +165,46 @@ class WorkspaceSync:
     def _reconcile_both(self, relative_path: str, local_data: bytes, remote_etag: str) -> None:
         local_hash = content_hash(local_data)
         last_synced = self.state.get(relative_path)
-        if last_synced is None:
-            self._adopt_or_conflict(relative_path, local_hash, remote_etag)
-            return
-        local_changed = last_synced["hash"] != local_hash
-        remote_changed = last_synced["etag"] != remote_etag
+        local_changed = last_synced is None or last_synced["hash"] != local_hash
+        remote_changed = last_synced is None or last_synced["etag"] != remote_etag
         if local_changed and remote_changed:
-            self._adopt_or_conflict(relative_path, local_hash, remote_etag)
+            self._merge_with_remote(relative_path, local_data, remote_etag)
         elif local_changed:
             self._push(relative_path, local_data, expected_etag=remote_etag)
         elif remote_changed:
             self._pull(relative_path, remote_etag)
 
-    def _adopt_or_conflict(self, relative_path: str, local_hash: str, remote_etag: str) -> None:
-        remote_content = self.client.download(self._remote_path(relative_path))
-        if content_hash(remote_content) == local_hash:
-            self.state[relative_path] = {"hash": local_hash, "etag": remote_etag}
-        else:
-            self._write_conflict_copy(relative_path, remote_content)
+    def _merge_with_remote(self, relative_path: str, local_data: bytes, remote_etag: str) -> None:
+        remote_data = self.client.download(self._remote_path(relative_path))
+        if remote_data == local_data:
+            self.state[relative_path] = {"hash": content_hash(local_data), "etag": remote_etag}
+            return
+        merged_text = combine_versions(
+            local_data.decode("utf-8", errors="replace"), remote_data.decode("utf-8", errors="replace")
+        )
+        merged_data = merged_text.encode("utf-8")
+        (self.meta / relative_path).write_bytes(merged_data)
+        try:
+            new_etag = self.client.upload(self._remote_path(relative_path), merged_data, remote_etag)
+        except PreconditionFailed:
+            return
+        self.state[relative_path] = {"hash": content_hash(merged_data), "etag": new_etag}
+        self.report.merged.append(relative_path)
 
     def _push(self, relative_path: str, data: bytes, expected_etag: str | None) -> None:
         try:
             new_etag = self.client.upload(self._remote_path(relative_path), data, expected_etag)
         except PreconditionFailed:
-            self._save_conflict(relative_path)
+            self._merge_after_lost_race(relative_path, data)
             return
         self.state[relative_path] = {"hash": content_hash(data), "etag": new_etag}
         self.report.pushed.append(relative_path)
+
+    def _merge_after_lost_race(self, relative_path: str, local_data: bytes) -> None:
+        parent, _, name = self._remote_path(relative_path).rpartition("/")
+        current_etag = self.client.list_directory(parent).get(name, ("", False))[0]
+        if current_etag:
+            self._merge_with_remote(relative_path, local_data, current_etag)
 
     def _pull(self, relative_path: str, remote_etag: str) -> None:
         content = self.client.download(self._remote_path(relative_path))
@@ -191,14 +213,6 @@ class WorkspaceSync:
         target.write_bytes(content)
         self.state[relative_path] = {"hash": content_hash(content), "etag": remote_etag}
         self.report.pulled.append(relative_path)
-
-    def _save_conflict(self, relative_path: str) -> None:
-        self._write_conflict_copy(relative_path, self.client.download(self._remote_path(relative_path)))
-
-    def _write_conflict_copy(self, relative_path: str, remote_content: bytes) -> None:
-        path = self.meta / relative_path
-        path.with_name(f"{path.stem}{CONFLICT_MARKER}{path.suffix}").write_bytes(remote_content)
-        self.report.conflicts.append(relative_path)
 
 
 def sync_workspace(

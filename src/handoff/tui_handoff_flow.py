@@ -220,11 +220,12 @@ class HandoffFlowMixin:
                 self.pop_screen()
         if report is None:
             return False
-        if report.conflicts:
+        if report.needs_review:
             self.notify(
-                f"Sync conflict in {', '.join(report.conflicts)}; remote copy saved as *.conflict.md",
+                f"Edits from two machines were combined in {', '.join(report.needs_review)}. "
+                "Search for <<<<<<< and keep what you want.",
                 severity="warning",
-                timeout=10,
+                timeout=12,
             )
         else:
             self.notify(f"Synced: {report.summary()}")

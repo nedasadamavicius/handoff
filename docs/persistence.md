@@ -66,23 +66,33 @@ folders with the same name would share notes. Add a remote or rename one.
   locally does not delete it on the server (and it comes back on the next pull).
 - Local state for the sync is in `.handoff/.sync-state.json`.
 
-### Conflicts
+### When two machines edited the same note
 
-If two machines changed the same file before syncing, nothing is overwritten.
-The server's version is saved next to yours as `NEXT.conflict.md` (or the
-matching name) and handoff reports it on every sync until you resolve it. To
-resolve:
+Nothing is ever silently overwritten, and you do not have to pick a winner up
+front. Handoff combines the two versions into the file itself, pushes the
+combined result so every machine ends up with the same text, and warns you:
 
-- **Keep the server's version:** copy the contents of the `.conflict.md` file
-  over your file, then run `handoff sync now`. The two now match, so the
-  conflict clears.
-- **Keep your version:** delete that file in the Nextcloud web UI, then run
-  `handoff sync now`. Your copy is uploaded as new.
-- **Merge both:** edit your file into the merged text, delete the file in the
-  Nextcloud web UI, then run `handoff sync now`. Merging alone is not enough
-  yet, because the server copy still differs.
+```
+- one
+- two
+<<<<<<< this machine
+- from this machine
+=======
+- from the other machine
+>>>>>>> from Nextcloud
+```
 
-Finally delete the `.conflict.md` file; it is never uploaded.
+Lines both versions share are kept once. If only one machine changed a note, its
+version simply wins with no markers. When both changed the same stretch, both are
+kept between the markers. Open the file, keep what you want, delete the three
+marker lines, and save. The next sync pushes your cleaned-up version.
+
+Handoff reminds you after every sync (`review markers in NEXT.md`, and a warning
+inside the TUI) until no markers are left. Search for `<<<<<<<` to find them.
+
+Because handoff does not keep the last shared copy, it cannot tell edits in
+different parts of a note apart from edits to the same part, so it marks the whole
+differing stretch. Expect the markers to be a little wider than strictly needed.
 
 ### Troubleshooting
 
@@ -93,8 +103,8 @@ Finally delete the `.conflict.md` file; it is never uploaded.
 | `Offline (...)` | The server is unreachable or its certificate is not trusted. The message includes the reason, for example `CERTIFICATE_VERIFY_FAILED` for a self-signed certificate. |
 | `Authentication failed; run handoff sync login` | The app password was revoked or changed. Log in again. |
 | `Sync timed out` | A sync took over 60 seconds. Run `handoff sync now` again; it resumes where it stopped. |
-| A file keeps conflicting | Follow the conflict steps above. |
-| Start over on one machine | Delete `.handoff/.sync-state.json`. The next sync compares contents again; identical files are adopted and differing ones become conflicts. |
+| `review markers in ...` after every sync | A note still contains `<<<<<<<` markers. Resolve them as described above. |
+| Start over on one machine | Delete `.handoff/.sync-state.json`. The next sync compares contents again; identical files are adopted and differing ones are combined with markers. |
 
 ### Turn it off or remove it
 
