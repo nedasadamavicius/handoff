@@ -4,6 +4,19 @@ version = "0.1.0"
 description = "Local-first terminal workspace shell with Markdown handoffs."
 authors = ["Neds <neds@example.com>"]
 readme = "README.md"
+repository = "https://github.com/nedasadamavicius/handoff"
+keywords = ["tui", "terminal", "handoff", "notes", "ai-agents", "markdown"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
 packages = [{ include = "handoff", from = "src" }]
 
 [tool.poetry.dependencies]
@@ -17,9 +30,50 @@ ptyprocess = { version = "^0.7.0", markers = "sys_platform != 'win32'" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.1"
+black = "^26.1"
+isort = "^6.0"
+pylint = "^4.0"
 
 [tool.poetry.scripts]
 handoff = "handoff.cli:app"
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.pylint.main]
+source-roots = ["src"]
+jobs = 0
+
+[tool.pylint.basic]
+good-names = ["x", "y", "_"]
+variable-rgx = "[a-z_][a-z0-9_]{2,}$"
+argument-rgx = "[a-z_][a-z0-9_]{2,}$"
+attr-rgx = "[a-z_][a-z0-9_]{2,}$"
+allowed-redefined-builtins = ["id"]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+    "broad-exception-caught",
+    "import-outside-toplevel",
+]
+
+[tool.pylint.design]
+max-args = 8
+max-positional-arguments = 8
+max-attributes = 20
+max-parents = 10
+min-public-methods = 1
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
