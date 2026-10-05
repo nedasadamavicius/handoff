@@ -369,9 +369,13 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         self.sub_title = mode or kind
         self.show_workspace_overview()
         self.run_worker(asyncio.to_thread(self._rename_handoff_window), exclusive=False)
-        self._check_pending_weeks()
         self.set_interval(WATCH_INTERVAL, self._watch_workspace)
-        if mode is None and had_workspace_file:
+        self.run_worker(self._finish_opening(ask_for_mode=mode is None and had_workspace_file), exclusive=False)
+
+    async def _finish_opening(self, ask_for_mode: bool) -> None:
+        await self._sync_and_refresh()
+        self._check_pending_weeks()
+        if ask_for_mode:
             self.push_screen(WorkspaceModeScreen(), self._save_workspace_mode)
 
     def _rename_handoff_window(self) -> None:

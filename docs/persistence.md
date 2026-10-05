@@ -41,15 +41,14 @@ see against a real one.
    `weeks/` folders. The repo id is the normalised git remote, for example
    `github.com__owner__repo`.
 
-From now on, opening `handoff` in the repo pulls first, and saving a handoff
-pushes.
+From now on, opening `handoff` in the repo syncs, and saving a handoff syncs again.
 
 ### Add another machine
 
 Install handoff there, run `handoff sync login` with the same server and app
 password (or create a second app password, which lets you revoke machines
 separately), then open `handoff` in a clone of the same repo. It prints
-`Syncing handoff notes...` and pulls your existing notes. The repo id comes
+`New clone: fetching your handoff notes...` and pulls your existing notes. The repo id comes
 from the git remote, so the clone can live at any path.
 
 Repos with no `origin` remote use the folder name as the id, so two unrelated
@@ -57,12 +56,22 @@ folders with the same name would share notes. Add a remote or rename one.
 
 ### How syncing behaves
 
-- Handoff pulls when it opens in a repo and pushes whenever you save a handoff
-  or quit with unsynced changes. Run `handoff sync now` to force one.
-- Saving or quitting shows a "Syncing" box that cannot be closed until the sync
-  finishes or fails, so you do not leave a machine with unsynced notes.
-- Offline (or the server unreachable): handoff does not block. It says so and
-  syncs the next time it opens with a connection. Nothing is lost.
+- Handoff syncs with the server in two situations: when the TUI opens (a
+  "Syncing" box appears; it pulls, and also pushes anything left over from an
+  offline save), and when you save a handoff. Quitting with `q` on its own never
+  syncs; run `handoff sync now` to push other edits.
+- The one exception is a brand-new clone with no `.handoff` yet. There handoff
+  fetches your notes before the TUI starts, so it does not create default notes
+  that would then have to be merged with yours.
+- Saving a handoff shows a "Syncing" box that cannot be closed until the server
+  confirms. If you chose to quit after saving, handoff exits only once it
+  confirms, and prints `Handoff saved and synced (...)`.
+- Offline (or the server unreachable): the handoff is still saved locally and
+  handoff exits normally, telling you it will sync the next time it opens with a
+  connection. Nothing is lost.
+- A server error (for example a rejected login) keeps the TUI open so you can
+  read the message instead of losing it; press `q` again to leave. The handoff
+  is already saved locally.
 - Only notes are synced (`LAST/NEXT/WORKSPACE/WORKLOG.md`, `sessions/`, `days/`,
   `weeks/`), never `DRAFT.md`. Deletions are not propagated, so deleting a note
   locally does not delete it on the server (and it comes back on the next pull).
@@ -103,10 +112,25 @@ differing stretch. Expect the markers to be a little wider than strictly needed.
 | `login rejected` | Wrong username or app password. Create a fresh app password; with 2FA your normal password never works. |
 | `could not reach server` at login | Check the URL opens in a browser, includes any subfolder, and uses `https://`. |
 | `Offline (...)` | The server is unreachable or its certificate is not trusted. The message includes the reason, for example `CERTIFICATE_VERIFY_FAILED` for a self-signed certificate. |
+| `Server refused the request (403)` | Not a login problem: something in front of Nextcloud (a firewall such as Cloudflare, or a reverse proxy rule) blocked the request. The message includes the server's reason. |
+| `Server refused the request (403)` | Not a login problem: something in front of Nextcloud (a firewall such as Cloudflare, or a reverse proxy rule) blocked the request. The message includes the server's reason. |
 | `Authentication failed; run handoff sync login` | The app password was revoked or changed. Log in again. |
 | `Sync timed out` | A sync took over 60 seconds. Run `handoff sync now` again; it resumes where it stopped. |
 | `review markers in ...` after every sync | A note still contains `<<<<<<<` markers. Resolve them as described above. |
 | Start over on one machine | Delete `.handoff/.sync-state.json`. The next sync compares contents again; identical files are adopted and differing ones are combined with markers. |
+
+### Known limitations
+
+- **Open a new clone while online.** On a brand-new clone, handoff fetches your
+  notes before creating any. If that first open happens offline, handoff creates
+  default `LAST.md`, `NEXT.md` and `WORKSPACE.md` instead. The next sync then
+  combines those defaults with your real notes and leaves merge markers in them.
+  Resolve them by keeping your real text, or avoid it by making the first open of
+  a new clone one with a connection.
+- Merge markers cover the whole differing stretch of a note, not just the lines
+  that actually clash (handoff does not keep the last shared copy).
+- Self-signed certificates are not supported.
+- There is no `logout` command (see below).
 
 ### Turn it off or remove it
 

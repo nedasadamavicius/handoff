@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from handoff.documents import (
@@ -8,7 +10,7 @@ from handoff.documents import (
 )
 from handoff.git import changed_files_from_status, git_status_short
 from handoff.handoff import draft_has_content, parse_last_sections
-from handoff.note_sync import has_unsynced, sync_for_repo
+from handoff.note_sync import SyncReport, sync_for_repo
 from handoff.session import now_local
 from handoff.source_tags import format_numbered, number_files, resolve_source_tags
 from handoff.tui_agents import QuitAgentScreen
@@ -34,6 +36,22 @@ from handoff.workspace import (
     workspace_mode,
     workspace_type,
 )
+
+OFFLINE_MESSAGE = "Offline: your notes will sync the next time handoff opens with a connection."
+
+
+class SyncOutcome(Enum):
+    NOT_CONFIGURED = "not configured"
+    SYNCED = "synced"
+    NEEDS_REVIEW = "needs review"
+    OFFLINE = "offline"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    outcome: SyncOutcome
+    message: str = ""
 
 
 class HandoffFlowMixin:
@@ -183,20 +201,29 @@ class HandoffFlowMixin:
         self.run_worker(self._finish_save(), exclusive=False)
 
     async def _finish_save(self) -> None:
-        if await self._sync_blocking("Syncing handoff notes"):
+        result = await self._sync_and_refresh()
+        if not self.quit_after_handoff:
+            return
+        self.quit_after_handoff = False
+        if result.outcome is SyncOutcome.FAILED:
+            return
+        exit_message = f"Handoff saved. {result.message}" if result.message else None
+        await self._shutdown_and_exit(exit_message=exit_message)
+
+    async def _sync_and_refresh(self) -> SyncResult:
+        result = await self._sync_blocking("Syncing handoff notes")
+        if result.outcome in (SyncOutcome.SYNCED, SyncOutcome.NEEDS_REVIEW):
             self.show_workspace_overview()
-        if self.quit_after_handoff:
-            self.quit_after_handoff = False
-            await self._shutdown_and_exit()
+        return result
 
     @property
     def _sync_enabled(self) -> bool:
         return self.config.sync is not None and bool(load_password(self.config.root))
 
-    async def _sync_blocking(self, title: str) -> bool:
-        """Sync behind a modal that cannot be dismissed. Offline or errors end it with a notice."""
+    async def _sync_blocking(self, title: str) -> SyncResult:
+        """Sync behind a modal that cannot be dismissed until the server answers, fails, or is unreachable."""
         if not self._sync_enabled:
-            return False
+            return SyncResult(SyncOutcome.NOT_CONFIGURED)
         screen = SyncScreen(title)
         await self.push_screen(screen)
 
@@ -208,28 +235,38 @@ class HandoffFlowMixin:
                 sync_for_repo, self.config.root, self.config.sync, self.workspace.path, progress
             )
         except OfflineError:
-            self.notify(
-                "Offline: notes will sync next time handoff opens with a connection.", severity="warning", timeout=8
-            )
-            return False
-        except SyncError as exc:
-            self.notify(f"Sync error: {exc}", severity="error", timeout=10)
-            return False
+            result = SyncResult(SyncOutcome.OFFLINE, OFFLINE_MESSAGE)
+        except SyncError as error:
+            result = SyncResult(SyncOutcome.FAILED, f"Sync error: {error}")
+        else:
+            result = self._result_for_report(report)
         finally:
             if self.screen is screen:
                 self.pop_screen()
+        self._announce(result)
+        return result
+
+    @staticmethod
+    def _result_for_report(report: SyncReport | None) -> SyncResult:
         if report is None:
-            return False
+            return SyncResult(SyncOutcome.NOT_CONFIGURED)
         if report.needs_review:
-            self.notify(
+            return SyncResult(
+                SyncOutcome.NEEDS_REVIEW,
                 f"Edits from two machines were combined in {', '.join(report.needs_review)}. "
                 "Search for <<<<<<< and keep what you want.",
-                severity="warning",
-                timeout=12,
             )
-        else:
-            self.notify(f"Synced: {report.summary()}")
-        return True
+        return SyncResult(SyncOutcome.SYNCED, f"Synced ({report.summary()}).")
+
+    def _announce(self, result: SyncResult) -> None:
+        severities = {
+            SyncOutcome.SYNCED: "information",
+            SyncOutcome.NEEDS_REVIEW: "warning",
+            SyncOutcome.OFFLINE: "warning",
+            SyncOutcome.FAILED: "error",
+        }
+        if result.outcome in severities:
+            self.notify(result.message, severity=severities[result.outcome], timeout=12)
 
     def action_quit(self) -> None:
         draft = self.workspace.draft_file
@@ -248,11 +285,9 @@ class HandoffFlowMixin:
         elif choice == "discard":
             self.run_worker(self._shutdown_and_exit(), exclusive=False)
 
-    async def _shutdown_and_exit(self) -> None:
-        if self._sync_enabled and has_unsynced(self.workspace.meta):
-            await self._sync_blocking("Syncing before exit")
+    async def _shutdown_and_exit(self, exit_message: str | None = None) -> None:
         if self.session_widget is not None:
             await self.session_widget.shutdown_async()
         else:
             await asyncio.to_thread(self.session_manager.shutdown)
-        self.exit()
+        self.exit(message=exit_message)

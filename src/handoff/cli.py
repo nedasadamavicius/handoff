@@ -7,7 +7,7 @@ import typer
 
 from handoff.cli_common import ConfigRoot
 from handoff.cli_state import link_repository_state, state_app
-from handoff.cli_sync import pull_on_open, sync_app
+from handoff.cli_sync import pull_new_clone, sync_app
 from handoff.config import DEFAULT_ROOT, ensure_config
 from handoff.memory_files import auto_migrate_memory_files, memory_file_migration
 from handoff.workspace import WORKSPACE_MODES, current_directory_workspace, initialize_directory_workspace
@@ -25,7 +25,7 @@ def main(ctx: typer.Context) -> None:
 
     config = ensure_config()
     link_repository_state(Path.cwd(), config.state_root, interactive=True)
-    pull_on_open(config, Path.cwd())
+    pull_new_clone(config, Path.cwd())
     workspace = initialize_directory_workspace(Path.cwd(), workspace_mode_value=None)
     if config.source_tags:
         for path in auto_migrate_memory_files(workspace, config.tools):

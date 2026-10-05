@@ -39,9 +39,11 @@ def run_sync(config: AppConfig, repo: Path, *, report_when_unconfigured: bool = 
     return True
 
 
-def pull_on_open(config: AppConfig, repo: Path) -> None:
-    if config.sync is not None and load_password(config.root):
-        typer.echo("Syncing handoff notes...")
+def pull_new_clone(config: AppConfig, repo: Path) -> None:
+    """Fetch existing notes before handoff creates default ones; later opens sync inside the TUI."""
+    has_notes = (repo / ".handoff" / "WORKSPACE.md").exists()
+    if not has_notes and config.sync is not None and load_password(config.root):
+        typer.echo("New clone: fetching your handoff notes...")
         run_sync(config, repo)
 
 
