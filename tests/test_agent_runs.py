@@ -23,9 +23,16 @@ def test_snapshots_are_pending_and_collision_free(tmp_path: Path, monkeypatch) -
     ws.draft_file.write_text("draft", encoding="utf-8")
     ledger = RunLedger(ws)
     run = ledger.begin("Agent/One", "codex")
-    monkeypatch.setattr("handoff.agent_runs.datetime", type("Clock", (), {
-        "now": staticmethod(lambda: __import__("datetime").datetime(2026, 1, 2, 3, 4, 5, 6)),
-    }))
+    monkeypatch.setattr(
+        "handoff.agent_runs.datetime",
+        type(
+            "Clock",
+            (),
+            {
+                "now": staticmethod(lambda: __import__("datetime").datetime(2026, 1, 2, 3, 4, 5, 6)),
+            },
+        ),
+    )
     first = ledger.snapshot(run)
     second = ledger.snapshot(run)
     assert first is not None and second is not None and first != second

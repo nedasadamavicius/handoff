@@ -4,35 +4,30 @@ import asyncio
 import os
 from pathlib import Path
 
-from textual import events
-from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.errors import NoWidget
-from textual.widgets import Button, ContentSwitcher, DataTable, DirectoryTree, Footer, Label, Markdown, MarkdownViewer, TextArea
+from textual.widgets import (
+    Button,
+    ContentSwitcher,
+    DataTable,
+    DirectoryTree,
+    Footer,
+    Label,
+    Markdown,
+    MarkdownViewer,
+    TextArea,
+)
 
-from handoff.config import AppConfig
 from handoff.agent_runs import RunLedger
-from handoff.tui_agents import QuitAgentScreen
-from handoff.external_sessions import SessionManager
-from handoff.tui_sessions import SessionManagerWidget
+from handoff.config import AppConfig
 from handoff.documents import (
-    MARKDOWN_SUFFIXES,
-    deduplicate_next_lines,
     is_markdown_file,
-    merge_next_text,
-    normalize_list_text,
-    render_last_markdown,
-    render_next_markdown,
     strip_first_heading,
     strip_first_subheading,
     strip_handoff_frontmatter,
-    strip_next_heading,
-    strip_yaml_frontmatter,
 )
-from handoff.git import changed_files_from_status, git_status_short
-from handoff.source_tags import format_numbered, number_files, resolve_source_tags
+from handoff.external_sessions import SessionManager
 from handoff.launcher import (
     LaunchError,
     editor_command,
@@ -41,32 +36,26 @@ from handoff.launcher import (
     run_command,
     spawn_detached,
 )
-from handoff.handoff import draft_has_content, parse_draft_or_files, parse_last_sections
+from handoff.memory_files import ensure_tool_file
 from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
-from handoff.tui_forms import EditableInput, EditableTextArea
-from handoff.tui_logs import LogBrowserScreen, LogPreview
-from handoff.tui_screens import EntryKind, HandoffScreen, KnowledgeScreen, NewEntryScreen, WeeklyReviewScreen, WorkspaceModeScreen
-from handoff.weekly import (
-    append_week_to_worklog,
-    auto_generate_draft,
-    finalize_week_draft,
-    find_pending_weeks,
-    read_week_draft,
-    week_label,
+from handoff.tui_handoff_flow import HandoffFlowMixin
+from handoff.tui_navigation import PaneNavigationMixin
+from handoff.tui_screens import (
+    EntryKind,
+    NewEntryScreen,
+    WorkspaceModeScreen,
 )
-from handoff.workflows import save_workspace_handoff
+from handoff.tui_sessions import SessionManagerWidget
 from handoff.workspace import (
     Workspace,
-    ensure_tool_file,
     ensure_workspace_files,
     infer_workspace_type,
     preview_file,
     set_workspace_mode,
-    workspace_type,
     workspace_mode,
+    workspace_type,
 )
-
 
 HIDDEN_TREE_NAMES = {
     ".git",
@@ -94,7 +83,9 @@ def directory_signature(directories: list[Path]) -> tuple:
     for directory in directories:
         try:
             with os.scandir(directory) as entries:
-                listing = tuple(sorted((entry.name, entry.is_dir()) for entry in entries if is_tree_visible(entry.name)))
+                listing = tuple(
+                    sorted((entry.name, entry.is_dir()) for entry in entries if is_tree_visible(entry.name))
+                )
         except OSError:
             listing = None
         signature.append((str(directory), listing))
@@ -131,7 +122,7 @@ class WorkspaceDirectoryTree(DirectoryTree):
             self.app.handle_navigation_key(event.key)
 
 
-class WorkspaceShell(App):
+class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
     TITLE = "handoff"
 
     CSS = """
@@ -354,7 +345,9 @@ class WorkspaceShell(App):
                             id="text-preview",
                         )
                     with Vertical(id="agents-view"):
-                        self.session_widget = SessionManagerWidget(self.session_manager, self.config, self.workspace.path, ledger=self.run_ledger)
+                        self.session_widget = SessionManagerWidget(
+                            self.session_manager, self.config, ledger=self.run_ledger
+                        )
                         yield self.session_widget
         yield Footer()
 
@@ -369,7 +362,9 @@ class WorkspaceShell(App):
         self.theme_changed_signal.subscribe(self, lambda _theme: self.update_focus_styles())
         had_workspace_file = self.workspace.workspace_file.exists()
         kind = workspace_type(self.workspace) or infer_workspace_type(self.workspace)
-        ensure_workspace_files(self.workspace, workspace_kind=kind, workspace_mode=None if had_workspace_file else "coding")
+        ensure_workspace_files(
+            self.workspace, workspace_kind=kind, initial_mode=None if had_workspace_file else "coding"
+        )
         mode = workspace_mode(self.workspace)
         self.sub_title = mode or kind
         self.show_workspace_overview()
@@ -666,7 +661,10 @@ class WorkspaceShell(App):
 
     def action_kill_tool(self) -> None:
         """Stop the active terminal process, if any."""
-        if self.session_widget is not None and self.query_one("#right-switcher", ContentSwitcher).current == "agents-view":
+        if (
+            self.session_widget is not None
+            and self.query_one("#right-switcher", ContentSwitcher).current == "agents-view"
+        ):
             self.session_widget.stop_selected()
 
     def action_launch_tool(self, index: int) -> None:
@@ -680,381 +678,3 @@ class WorkspaceShell(App):
         if self.session_widget is None:
             return
         self.session_widget.launch_background(name)
-
-    def action_move_up(self) -> None:
-        if isinstance(self.focused, TextArea):
-            return
-        if self.focus_area == "preview" and self.preview_mode:
-            self.scroll_preview("up")
-            return
-        if self.focus_area in ("last", "next"):
-            self._scroll_overview_panel(f"{self.focus_area}-panel", "up")
-            return
-        focused = self.focused
-        if isinstance(focused, DirectoryTree):
-            focused.action_cursor_up()
-            return
-        self.query_one("#file-tree", DirectoryTree).focus()
-
-    def action_move_down(self) -> None:
-        if isinstance(self.focused, TextArea):
-            return
-        if self.focus_area == "preview" and self.preview_mode:
-            self.scroll_preview("down")
-            return
-        if self.focus_area in ("last", "next"):
-            self._scroll_overview_panel(f"{self.focus_area}-panel", "down")
-            return
-        focused = self.focused
-        if isinstance(focused, DirectoryTree):
-            focused.action_cursor_down()
-            return
-        self.query_one("#file-tree", DirectoryTree).focus()
-
-    def action_focus_tree(self) -> None:
-        self.focus_area = "files"
-        self.query_one("#file-tree", DirectoryTree).focus()
-        self.update_focus_styles()
-
-    def action_focus_preview(self) -> None:
-        if self.preview_mode:
-            self.focus_area = "preview"
-            self.update_focus_styles()
-
-    def action_focus_next_overview_panel(self) -> None:
-        if self.focus_area == "last":
-            self.focus_area = "next"
-            self.update_focus_styles()
-
-    def pane_for_widget(self, widget) -> str | None:
-        """Map a clicked widget to the focus area of the pane containing it."""
-        node = widget
-        while node is not None:
-            node_id = getattr(node, "id", None)
-            if node_id == "browser":
-                return "files"
-            if node_id in ("preview", "text-preview"):
-                return "preview" if self.preview_mode else None
-            if node_id == "last-container":
-                return "last"
-            if node_id == "next-container":
-                return "next"
-            node = node.parent
-        return None
-
-    async def on_event(self, event: events.Event) -> None:
-        # Pick the pane as soon as the raw click arrives, instead of waiting for the
-        # forwarded MouseDown to bubble back up through every nested widget.
-        if isinstance(event, events.MouseDown) and not event.is_forwarded:
-            self.focus_pane_at(event.screen_x, event.screen_y)
-        await super().on_event(event)
-
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        # Fallback for clicks injected past on_event (e.g. Textual's test pilot); a
-        # no-op when on_event already handled the click.
-        self.focus_pane_at(event.screen_x, event.screen_y)
-
-    def focus_pane_at(self, x: int, y: int) -> None:
-        try:
-            widget, _ = self.screen.get_widget_at(x, y)
-        except NoWidget:
-            return
-        area = self.pane_for_widget(widget)
-        if area is None:
-            return
-        tree = self.query_one("#file-tree", DirectoryTree)
-        if area == self.focus_area and self.focused is tree:
-            return
-        self.focus_area = area
-        # Navigation keys are routed through the tree, so it keeps keyboard focus.
-        tree.focus(scroll_visible=False)
-        self.update_focus_styles()
-
-    def update_focus_styles(self) -> None:
-        # Set the focus border inline rather than toggling a CSS class: a class change
-        # restyles every descendant (each Markdown block), which made focus moves lag.
-        # Clearing the inline border falls back to the pane's stylesheet border.
-        focused = {
-            "#browser": self.focus_area == "files",
-            "#preview": self.focus_area == "preview" and self.active_preview == "markdown",
-            "#text-preview": self.focus_area == "preview" and self.active_preview == "text",
-            "#last-container": self.focus_area == "last",
-            "#next-container": self.focus_area == "next",
-        }
-        accent = self.get_css_variables()["accent"]
-        for selector, is_focused in focused.items():
-            pane = self.query_one(selector)
-            pane.styles.border = ("heavy", accent) if is_focused else None
-
-    def handle_navigation_key(self, key: str) -> None:
-        if isinstance(self.focused, TextArea):
-            return
-        if key == "left":
-            if self.focus_area == "next":
-                self.focus_area = "last"
-                self.update_focus_styles()
-            elif self.focus_area == "last":
-                self.action_focus_tree()
-            else:
-                self.action_focus_tree()
-        elif key == "right":
-            if self.focus_area == "last":
-                self.action_focus_next_overview_panel()
-            elif self.focus_area == "files" and not self.preview_mode:
-                self.focus_area = "last"
-                self.update_focus_styles()
-            else:
-                self.action_focus_preview()
-        elif key == "up":
-            self.action_move_up()
-        elif key == "down":
-            self.action_move_down()
-        elif key == "pageup":
-            self.action_page_up()
-        elif key == "pagedown":
-            self.action_page_down()
-        elif key == "home":
-            self.action_scroll_home()
-        elif key == "end":
-            self.action_scroll_end()
-        elif key == "enter":
-            self.action_select_focused()
-
-    def _scroll_overview_panel(self, panel_id: str, direction: str) -> None:
-        scroll_id = "last-scroll" if panel_id == "last-panel" else "next-scroll"
-        scroller = self.query_one(f"#{scroll_id}", VerticalScroll)
-        actions = {
-            "up": scroller.scroll_up,
-            "down": scroller.scroll_down,
-            "page_up": scroller.scroll_page_up,
-            "page_down": scroller.scroll_page_down,
-            "home": scroller.scroll_home,
-            "end": scroller.scroll_end,
-        }
-        actions[direction]()
-
-    def action_page_up(self) -> None:
-        if self.focus_area == "preview" and self.preview_mode:
-            self.scroll_preview("page_up")
-        elif self.focus_area == "last":
-            self._scroll_overview_panel("last-panel", "page_up")
-        elif self.focus_area == "next":
-            self._scroll_overview_panel("next-panel", "page_up")
-
-    def action_page_down(self) -> None:
-        if self.focus_area == "preview" and self.preview_mode:
-            self.scroll_preview("page_down")
-        elif self.focus_area in ("last", "next"):
-            self._scroll_overview_panel(f"{self.focus_area}-panel", "page_down")
-
-    def action_scroll_home(self) -> None:
-        if self.focus_area == "preview" and self.preview_mode:
-            self.scroll_preview("home")
-        elif self.focus_area in ("last", "next"):
-            self._scroll_overview_panel(f"{self.focus_area}-panel", "home")
-
-    def action_scroll_end(self) -> None:
-        if self.focus_area == "preview" and self.preview_mode:
-            self.scroll_preview("end")
-        elif self.focus_area in ("last", "next"):
-            self._scroll_overview_panel(f"{self.focus_area}-panel", "end")
-
-    def scroll_preview(self, direction: str) -> None:
-        preview = self.current_preview_widget()
-        if isinstance(preview, MarkdownViewer):
-            actions = {
-                "up": preview.action_scroll_up,
-                "down": preview.action_scroll_down,
-                "page_up": preview.action_page_up,
-                "page_down": preview.action_page_down,
-                "home": preview.action_scroll_home,
-                "end": preview.action_scroll_end,
-            }
-        else:
-            actions = {
-                "up": preview.scroll_up,
-                "down": preview.scroll_down,
-                "page_up": preview.scroll_page_up,
-                "page_down": preview.scroll_page_down,
-                "home": preview.scroll_home,
-                "end": preview.scroll_end,
-            }
-        try:
-            actions[direction]()
-        except SkipAction:
-            return
-
-    def current_preview_widget(self):
-        if self.active_preview == "text":
-            return self.query_one("#text-preview", TextArea)
-        return self.query_one("#preview", MarkdownViewer)
-
-    def action_select_focused(self) -> None:
-        if self.focus_area != "files":
-            return
-        focused = self.focused
-        if isinstance(focused, DirectoryTree):
-            focused.action_select_cursor()
-
-    def _check_pending_weeks(self) -> None:
-        workspace = self.workspace
-        pending = find_pending_weeks(workspace.days_dir, workspace.weeks_dir)
-        for year, week in pending:
-            week_path = workspace.week_file(year, week)
-            if not week_path.exists():
-                auto_generate_draft(workspace.name, workspace.days_dir, workspace.weeks_dir, year, week)
-        self.pending_weeks = pending
-        if pending:
-            label = week_label(*pending[0])
-            self.notify(
-                f"Weekly draft ready: {label}\nPress W to review and add to worklog.",
-                timeout=10,
-            )
-
-    def action_weekly_review(self) -> None:
-        if not self.pending_weeks:
-            if self.workspace.worklog_file.exists():
-                self.show_markdown_preview(self.workspace.worklog_file.read_text(encoding="utf-8"))
-            else:
-                self.notify("No pending weekly drafts. Work some sessions first!", severity="information")
-            return
-        year, week = self.pending_weeks[0]
-        fields = read_week_draft(self.workspace.weeks_dir, year, week)
-        if fields is None:
-            auto_generate_draft(
-                self.workspace.name,
-                self.workspace.days_dir,
-                self.workspace.weeks_dir,
-                year,
-                week,
-            )
-            fields = read_week_draft(self.workspace.weeks_dir, year, week) or ("", "", "")
-        summary, highlights, carry_forwards = fields
-        self.push_screen(
-            WeeklyReviewScreen(year, week, summary, highlights, carry_forwards),
-            lambda result: self._save_weekly(result, year, week),
-        )
-
-    def _save_weekly(self, result: dict[str, str] | None, year: int, week: int) -> None:
-        if result is None:
-            return
-        append_week_to_worklog(
-            self.workspace.worklog_file,
-            year,
-            week,
-            result["summary"],
-            result["highlights"],
-            result["carry_forwards"],
-        )
-        finalize_week_draft(self.workspace.weeks_dir, year, week)
-        self.pending_weeks = [w for w in self.pending_weeks if w != (year, week)]
-        if self.pending_weeks:
-            next_label = week_label(*self.pending_weeks[0])
-            self.notify(f"Saved. Another draft ready: {next_label} — press W to continue.", timeout=8)
-        else:
-            self.notify("Worklog updated.")
-        self.action_refresh()
-
-    def action_log_browser(self) -> None:
-        def on_result(path: Path | None) -> None:
-            if path is not None:
-                self.edit_path(path)
-        self.push_screen(LogBrowserScreen(self.workspace), on_result)
-
-    def action_knowledge(self) -> None:
-        if workspace_mode(self.workspace) != "study":
-            self.notify("Knowledge lookup is available in Study workspaces.", severity="information")
-            return
-        initial = self.active_file if self.active_file and is_markdown_file(self.active_file) else None
-        self._open_knowledge(initial)
-
-    def _open_knowledge(self, initial: Path | None) -> None:
-        def on_result(path: Path | None) -> None:
-            if path is not None:
-                self.edit_path(path)
-                self._open_knowledge(path)
-        self.push_screen(KnowledgeScreen(self.workspace.path, initial), on_result)
-
-    def action_handoff(self) -> None:
-        workspace = self.workspace
-        tools = [*self.tools_launched, *self.run_ledger.tools_launched]
-        kind = workspace_type(workspace) or "regular"
-        git_status = git_status_short(workspace.path) if kind == "code" else ""
-        changed_files = changed_files_from_status(git_status)
-        if self.config.source_tags:
-            changed_files = number_files(changed_files)
-            files_block = format_numbered(changed_files) or "- None detected"
-        else:
-            files_block = chr(10).join(f"- {item}" for item in changed_files) or "- None detected"
-        evidence = (
-            f"Files changed:\n{files_block}\n\n"
-            f"Tools launched:\n{chr(10).join(f'- {item}' for item in tools) or '- None tracked'}\n\n"
-            f"Git status:\n{git_status or 'No changes detected.'}"
-            if kind == "code"
-            else ""
-        )
-        next_template = (
-            preview_file(workspace.next_file, limit=3000)
-            if workspace.next_file.exists()
-            else "# Next\n\n- "
-        )
-        draft = self.run_ledger.merged_draft(next_template)
-        summary, done, open_items = parse_last_sections(draft.last)
-        if self.config.source_tags:
-            done, dropped = resolve_source_tags(done, changed_files)
-            if dropped:
-                self.notify(f"Dropped source tags not in changed files: {', '.join(dropped)}", severity="warning", timeout=8)
-        next_text = draft.next
-        self.push_screen(
-            HandoffScreen(workspace.name, summary, done, open_items, next_text, evidence),
-            self.save_handoff,
-        )
-
-    def save_handoff(self, result: dict[str, str] | None) -> None:
-        if result is None:
-            self.action_refresh()
-            return
-        if not any(result[key].strip() for key in ("summary", "done", "open", "next")):
-            self.notify("Handoff empty; nothing saved.")
-            return
-        if not result["summary"].strip():
-            self.notify("Summary is blank — saved with 'Not recorded'. Edit the session log to add one.", severity="warning", timeout=8)
-        ended_at = now_local()
-        save_workspace_handoff(
-            workspace=self.workspace,
-            started_at=self.started_at,
-            ended_at=ended_at,
-            files_opened=self.files_opened,
-            tools_launched=[*self.tools_launched, *self.run_ledger.tools_launched],
-            fields=result,
-        )
-        self.run_ledger.consume()
-        self.notify("Saved handoff, session log, and day log")
-        self.show_workspace_overview()
-        if self.quit_after_handoff:
-            self.quit_after_handoff = False
-            self.run_worker(self._shutdown_and_exit(), exclusive=False)
-
-    def action_quit(self) -> None:
-        draft = self.workspace.draft_file
-        pending = draft.exists() and draft_has_content(draft.read_text(encoding="utf-8"))
-        pending = pending or self.run_ledger.has_pending
-        pending = pending or any(s.state in {"starting", "running"} for s in self.session_manager.sessions)
-        if not pending:
-            self.run_worker(self._shutdown_and_exit(), exclusive=False)
-            return
-        self.push_screen(QuitAgentScreen(), self._finish_quit_choice)
-
-    def _finish_quit_choice(self, choice: str) -> None:
-        if choice == "handoff":
-            self.quit_after_handoff = True
-            self.action_handoff()
-        elif choice == "discard":
-            self.run_worker(self._shutdown_and_exit(), exclusive=False)
-
-    async def _shutdown_and_exit(self) -> None:
-        if self.session_widget is not None:
-            await self.session_widget.shutdown_async()
-        else:
-            await asyncio.to_thread(self.session_manager.shutdown)
-        self.exit()

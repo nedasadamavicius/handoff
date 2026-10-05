@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from handoff.documents import parse_markdown_sections
-
+from handoff.documents import EMPTY_BULLET_MARKERS, is_bullet, parse_markdown_sections, strip_bullet_prefix
 
 LAST_MARKER = "## LAST.md"
 NEXT_MARKER = "## NEXT.md"
@@ -41,6 +40,16 @@ def parse_draft_or_files(draft_text: str, next_text: str = "") -> HandoffDraft:
     return HandoffDraft(last=text.strip(), next=normalize_handoff_markdown(next_text).strip())
 
 
+def _is_placeholder_line(line: str) -> bool:
+    stripped = line.strip()
+    return (
+        not stripped
+        or stripped.startswith("#")
+        or stripped in EMPTY_BULLET_MARKERS
+        or (is_bullet(stripped) and not strip_bullet_prefix(stripped))
+    )
+
+
 def draft_has_content(text: str) -> bool:
     """True if a combined draft holds real content beyond the empty scaffold.
 
@@ -48,17 +57,7 @@ def draft_has_content(text: str) -> bool:
     existence must not be treated as unsaved work.
     """
     draft = parse_combined_draft(text)
-    for section in (draft.last, draft.next):
-        for line in section.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if stripped in {"-", "*", "- None", "* None", "None"}:
-                continue
-            if stripped.startswith(("- ", "* ")) and not stripped[2:].strip():
-                continue
-            return True
-    return False
+    return any(not _is_placeholder_line(line) for section in (draft.last, draft.next) for line in section.splitlines())
 
 
 def normalize_handoff_markdown(text: str) -> str:
@@ -100,19 +99,19 @@ LOW_VALUE_COMPLETED_EXACT_PREFIXES = (
 )
 
 
+def _is_low_value_item(item: str) -> bool:
+    lowered = item.lower()
+    return any(lowered.startswith(prefix + " ") or lowered == prefix for prefix in LOW_VALUE_COMPLETED_PREFIXES) or any(
+        lowered.startswith(prefix) for prefix in LOW_VALUE_COMPLETED_EXACT_PREFIXES
+    )
+
+
 def remove_low_value_completed_items(text: str) -> str:
     """Drop handoff bullets that only describe passive context gathering."""
-    kept: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("- ", "* ")):
-            item = stripped[2:].strip().lower()
-            if any(item.startswith(prefix + " ") or item == prefix for prefix in LOW_VALUE_COMPLETED_PREFIXES):
-                continue
-            if any(item.startswith(prefix) for prefix in LOW_VALUE_COMPLETED_EXACT_PREFIXES):
-                continue
-        kept.append(line)
-    return "\n".join(kept).strip()
+    kept_lines = [
+        line for line in text.splitlines() if not (is_bullet(line) and _is_low_value_item(strip_bullet_prefix(line)))
+    ]
+    return "\n".join(kept_lines).strip()
 
 
 def parse_last_sections(text: str) -> tuple[str, str, str]:

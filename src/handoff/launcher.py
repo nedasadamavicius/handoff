@@ -12,38 +12,31 @@ class LaunchError(RuntimeError):
     """Raised when an external editor or tool cannot be launched."""
 
 
-CODEX_FINALIZE_PROMPT = (
-    "Update .handoff/DRAFT.md from the work completed in this Codex session. "
-    "Use the required handoff format from AGENTS.md. "
-    "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'. "
-    "Complete LAST.md with what changed, relevant git diff details, and open issues. "
-    "In Completed, include shipped changes, decisions, fixes, or artifacts created. "
-    "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, or opening files; mention only the concrete outcome those steps produced. "
-    "Keep NEXT.md concise and include only durable next actions. "
-    "Do not make unrelated code changes."
-)
-
-CLAUDE_FINALIZE_PROMPT = (
-    "Update .handoff/DRAFT.md from the work completed in this Claude session. "
-    "Use the required handoff format from CLAUDE.md. "
-    "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'. "
-    "Complete LAST.md with what changed, relevant git diff details, and open issues. "
-    "In Completed, include shipped changes, decisions, fixes, or artifacts created. "
-    "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, or opening files; mention only the concrete outcome those steps produced. "
-    "Keep NEXT.md concise and include only durable next actions. "
-    "Do not make unrelated code changes."
-)
-
-
-SOURCE_TAG_PROMPT = (
+SOURCE_TAG_INSTRUCTION = (
     "In Completed, write one-line conceptual bullets with no file or function names, "
     "and end each with the repo-relative paths of the files it affected in square brackets, "
-    "e.g. [src/foo.ts]. Tag by path, never by number. "
+    "e.g. [src/foo.ts]. Tag by path, never by number."
 )
 
 
-def _with_source_tags(prompt: str, source_tags: bool) -> str:
-    return prompt.replace("Complete LAST.md with what changed, relevant", "Complete LAST.md with what changed, affected files, relevant") if not source_tags else SOURCE_TAG_PROMPT + prompt
+def finalize_prompt(tool_label: str, memory_file: str, source_tags: bool) -> str:
+    report_contents = "what changed, relevant git diff details, and open issues"
+    if not source_tags:
+        report_contents = "what changed, affected files, relevant git diff details, and open issues"
+    sentences = [
+        f"Update .handoff/DRAFT.md from the work completed in this {tool_label} session.",
+        f"Use the required handoff format from {memory_file}.",
+        "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'.",
+        f"Complete LAST.md with {report_contents}.",
+        "In Completed, include shipped changes, decisions, fixes, or artifacts created.",
+        "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, "
+        "or opening files; mention only the concrete outcome those steps produced.",
+        "Keep NEXT.md concise and include only durable next actions.",
+        "Do not make unrelated code changes.",
+    ]
+    if source_tags:
+        sentences.insert(5, SOURCE_TAG_INSTRUCTION)
+    return " ".join(sentences)
 
 
 NEXT_AUDIT_PROMPT = (
@@ -70,9 +63,13 @@ def next_audit_command(config: AppConfig) -> list[str]:
     parts = format_command(template)
     executable = parts[0] if parts else "claude"
     return [
-        executable, "-p", NEXT_AUDIT_PROMPT,
-        "--model", "sonnet",
-        "--allowedTools", NEXT_AUDIT_ALLOWED_TOOLS,
+        executable,
+        "-p",
+        NEXT_AUDIT_PROMPT,
+        "--model",
+        "sonnet",
+        "--allowedTools",
+        NEXT_AUDIT_ALLOWED_TOOLS,
     ]
 
 
@@ -91,9 +88,21 @@ def editor_command(config: AppConfig, file: Path, editor_name: str | None = None
     return format_command(template, file=file)
 
 
-TERMINAL_EDITORS = frozenset({
-    "nvim", "vim", "vi", "hx", "helix", "nano", "micro", "kak", "ne", "joe", "mcedit",
-})
+TERMINAL_EDITORS = frozenset(
+    {
+        "nvim",
+        "vim",
+        "vi",
+        "hx",
+        "helix",
+        "nano",
+        "micro",
+        "kak",
+        "ne",
+        "joe",
+        "mcedit",
+    }
+)
 
 
 def is_terminal_editor(command: list[str]) -> bool:
@@ -134,33 +143,32 @@ def tool_command(config: AppConfig, tool_name: str) -> str:
     return template
 
 
+def finalize_executable(tool_name: str, command: str, keyword: str) -> str | None:
+    """The tool's executable when ``tool_name``/``command`` really launch ``keyword``, else None."""
+    if keyword not in f"{tool_name} {command}".lower():
+        return None
+    command_parts = format_command(command)
+    if not command_parts or keyword not in Path(command_parts[0]).name.lower():
+        return None
+    return command_parts[0]
+
+
 def codex_finalize_command(tool_name: str, command: str, source_tags: bool = True) -> str | None:
-    combined = (tool_name + " " + command).lower()
-    if "codex" not in combined:
+    executable = finalize_executable(tool_name, command, "codex")
+    if executable is None:
         return None
-    parts = format_command(command)
-    if not parts:
-        return None
-    executable = parts[0]
-    if "codex" not in Path(executable).name.lower():
-        return None
-    return subprocess.list2cmdline([executable, "exec", "resume", "--last", _with_source_tags(CODEX_FINALIZE_PROMPT, source_tags)])
+    prompt = finalize_prompt("Codex", "AGENTS.md", source_tags)
+    return subprocess.list2cmdline([executable, "exec", "resume", "--last", prompt])
 
 
 def claude_finalize_command(tool_name: str, command: str, source_tags: bool = True) -> str | None:
-    combined = (tool_name + " " + command).lower()
-    if "claude" not in combined:
+    executable = finalize_executable(tool_name, command, "claude")
+    if executable is None:
         return None
-    parts = format_command(command)
-    if not parts:
-        return None
-    executable = parts[0]
-    if "claude" not in Path(executable).name.lower():
-        return None
-    return subprocess.list2cmdline([
-        executable, "--continue", "-p", _with_source_tags(CLAUDE_FINALIZE_PROMPT, source_tags),
-        "--allowedTools", "Write(.handoff/*),Edit(.handoff/*)",
-    ])
+    prompt = finalize_prompt("Claude", "CLAUDE.md", source_tags)
+    return subprocess.list2cmdline(
+        [executable, "--continue", "-p", prompt, "--allowedTools", "Write(.handoff/*),Edit(.handoff/*)"]
+    )
 
 
 def run_command(command: list[str] | str, cwd: Path, *, shell: bool = False) -> int:

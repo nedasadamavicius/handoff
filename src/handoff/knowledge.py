@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
 
 from handoff.documents import MARKDOWN_SUFFIXES
 
-
 IGNORED_DIRECTORIES = {
-    ".git", ".handoff", ".pytest_cache", "__pycache__", "node_modules",
-    "vendor", "venv", ".venv", "dist", "build", "target",
+    ".git",
+    ".handoff",
+    ".pytest_cache",
+    "__pycache__",
+    "node_modules",
+    "vendor",
+    "venv",
+    ".venv",
+    "dist",
+    "build",
+    "target",
 }
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 MARKDOWN_LINK_RE = re.compile(r"!?(?:\[[^\]]*\])\(([^)#\s]+)(?:#[^)]+)?\)")
@@ -25,6 +33,10 @@ class Note:
     outgoing: list[Path] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     incoming: list[Path] = field(default_factory=list)
+
+    @property
+    def link_count(self) -> int:
+        return len(self.outgoing) + len(self.incoming)
 
 
 @dataclass
@@ -71,6 +83,7 @@ class KnowledgeIndex:
         values = list(self.notes.values())
         if not query:
             return sorted(values, key=lambda item: str(item.path).lower())
+
         def score(note: Note) -> tuple[int, str]:
             title = note.title.lower()
             path = str(note.path).lower()
@@ -87,6 +100,7 @@ class KnowledgeIndex:
             else:
                 rank = 99
             return rank, path
+
         return sorted((note for note in values if score(note)[0] < 99), key=score)
 
     def neighbors(self, path: Path) -> tuple[list[Note], list[Note]]:

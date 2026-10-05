@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from textual.binding import Binding
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, ScreenResultType
 from textual.widgets import ContentSwitcher, Input, Label, TextArea
 
 
@@ -28,7 +28,17 @@ class EditableInput(Input):
     BINDINGS = [*Input.BINDINGS, *_standard_edit_bindings()]
 
 
-class PagedTextScreen(ModalScreen[dict[str, str] | None]):
+class DialogScreen(ModalScreen[ScreenResultType]):
+    """Centered modal. Give the main container class ``dialog`` and its heading class ``dialog-title``."""
+
+    DEFAULT_CSS = """
+    DialogScreen { align: center middle; }
+    DialogScreen .dialog { border: solid $primary; background: $surface; padding: 1 2; }
+    DialogScreen .dialog-title { height: auto; text-style: bold; color: $accent; }
+    """
+
+
+class PagedTextScreen(DialogScreen[dict[str, str] | None]):
     """Shared keyboard navigation for modal forms composed of text pages."""
 
     FIELD_ORDER: ClassVar[list[tuple[str, str, str]]]

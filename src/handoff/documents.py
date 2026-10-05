@@ -1,10 +1,64 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
+import yaml
 
 MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdown", ".mkdn"}
+
+
+FRONTMATTER_DELIMITER = "---\n"
+BULLET_PREFIXES = ("- ", "* ")
+EMPTY_BULLET_MARKERS = {"-", "*", "- None", "* None", "None"}
+
+
+def split_frontmatter(text: str) -> tuple[dict, str]:
+    """Return (metadata, body); ({}, text) when the frontmatter is absent or malformed."""
+    if not text.startswith(FRONTMATTER_DELIMITER):
+        return {}, text
+    try:
+        _, raw_metadata, body = text.split(FRONTMATTER_DELIMITER, 2)
+        metadata = yaml.safe_load(raw_metadata) or {}
+    except (ValueError, yaml.YAMLError):
+        return {}, text
+    return (metadata if isinstance(metadata, dict) else {}), body.lstrip()
+
+
+def render_frontmatter(metadata: dict) -> str:
+    return f"{FRONTMATTER_DELIMITER}{yaml.safe_dump(metadata, sort_keys=False).strip()}\n---\n\n"
+
+
+def is_bullet(line: str) -> bool:
+    return line.strip().startswith(BULLET_PREFIXES)
+
+
+def strip_bullet_prefix(line: str) -> str:
+    stripped = line.strip()
+    return stripped[2:].strip() if is_bullet(stripped) else stripped
+
+
+def render_bullets(items: Iterable[str], empty: str = "- None") -> str:
+    bullets = [f"- {item}" for item in items]
+    return "\n".join(bullets) if bullets else empty
+
+
+def first_occurrences(items: Iterable[str], key: Callable[[str], str] = str.casefold) -> list[str]:
+    """Drop later items whose key was already seen, keeping the original order."""
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in items:
+        item_key = key(item)
+        if item_key not in seen:
+            seen.add(item_key)
+            unique.append(item)
+    return unique
+
+
+def parse_body_sections(markdown: str) -> dict[str, str]:
+    """Sections of a log body, ignoring its H1 title."""
+    without_title = "\n".join(line for line in markdown.splitlines() if not line.startswith("# "))
+    return parse_markdown_sections(without_title, heading_prefixes=("## ", "### "))
 
 
 def parse_markdown_sections(
@@ -26,13 +80,7 @@ def parse_markdown_sections(
 
 def strip_yaml_frontmatter(text: str) -> str:
     """Return Markdown content without a leading YAML frontmatter block."""
-    if not text.startswith("---\n"):
-        return text
-    try:
-        _, _frontmatter, body = text.split("---\n", 2)
-    except ValueError:
-        return text
-    return body.lstrip()
+    return split_frontmatter(text)[1]
 
 
 def strip_handoff_frontmatter(path: Path) -> None:
@@ -97,22 +145,21 @@ def strip_next_heading(markdown: str) -> str:
 
 
 def deduplicate_next_lines(text: str) -> str:
-    merged: list[str] = []
-    seen: set[str] = set()
+    kept_lines: list[str] = []
+    seen_lines: set[str] = set()
     for line in text.splitlines():
         normalized = line.strip()
         if not normalized:
-            if merged and merged[-1] != "":
-                merged.append("")
+            if kept_lines and kept_lines[-1] != "":
+                kept_lines.append("")
             continue
-        key = normalized.lower()
-        if key in seen:
+        if normalized.lower() in seen_lines:
             continue
-        seen.add(key)
-        merged.append(line)
-    while merged and not merged[-1].strip():
-        merged.pop()
-    return "\n".join(merged)
+        seen_lines.add(normalized.lower())
+        kept_lines.append(line)
+    while kept_lines and not kept_lines[-1].strip():
+        kept_lines.pop()
+    return "\n".join(kept_lines)
 
 
 def merge_next_text(existing: str, incoming: str) -> str:

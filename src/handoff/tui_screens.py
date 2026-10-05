@@ -4,17 +4,16 @@ from pathlib import Path
 from typing import Literal
 
 from rich.markdown import Markdown as RichMarkdown
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
-from textual.widgets import Button, ContentSwitcher, DataTable, Input, Label, MarkdownViewer, Static, TextArea
+from textual.css.query import NoMatches
+from textual.widgets import Button, ContentSwitcher, Input, Label, Static, TextArea
 
-from handoff.tui_forms import EditableInput, EditableTextArea, PagedTextScreen
+from handoff.knowledge import KnowledgeIndex
+from handoff.tui_forms import DialogScreen, EditableInput, EditableTextArea, PagedTextScreen
 from handoff.tui_graph import GraphView
 from handoff.weekly import week_label
-
 
 EntryKind = Literal["file", "folder"]
 
@@ -30,23 +29,9 @@ class HandoffScreen(PagedTextScreen):
     STATUS_SELECTOR = "#handoff-page-status"
 
     CSS = """
-    HandoffScreen {
-        align: center middle;
-    }
-
     #handoff-dialog {
         width: 88;
         height: 90%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #handoff-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
-        padding: 0;
     }
 
     #handoff-page-status {
@@ -115,8 +100,8 @@ class HandoffScreen(PagedTextScreen):
         self.evidence = evidence
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="handoff-dialog"):
-            yield Label(f"Session Handoff - {self.workspace_name}", id="handoff-title")
+        with Vertical(id="handoff-dialog", classes="dialog"):
+            yield Label(f"Session Handoff - {self.workspace_name}", id="handoff-title", classes="dialog-title")
             yield Label("", id="handoff-page-status")
             with ContentSwitcher(initial="page-summary", id="handoff-pages"):
                 with Vertical(id="page-summary", classes="handoff-page"):
@@ -199,24 +184,15 @@ class HandoffScreen(PagedTextScreen):
             }
         )
 
-class NewEntryScreen(ModalScreen[str | None]):
-    CSS = """
-    NewEntryScreen {
-        align: center middle;
-    }
 
+class NewEntryScreen(DialogScreen[str | None]):
+    CSS = """
     #new-entry-dialog {
         width: 60;
         height: auto;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
     }
 
     #new-entry-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
         padding: 0 0 1 0;
     }
 
@@ -245,8 +221,10 @@ class NewEntryScreen(ModalScreen[str | None]):
         self.entry_kind = entry_kind
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="new-entry-dialog"):
-            yield Label(f"New {self.entry_kind} in {self.directory.name}/", id="new-entry-title")
+        with Vertical(id="new-entry-dialog", classes="dialog"):
+            yield Label(
+                f"New {self.entry_kind} in {self.directory.name}/", id="new-entry-title", classes="dialog-title"
+            )
             placeholder = "folder-name" if self.entry_kind == "folder" else "filename.md"
             yield EditableInput(placeholder=placeholder, id="new-entry-input")
             with Horizontal(id="new-entry-buttons"):
@@ -273,13 +251,12 @@ class NewEntryScreen(ModalScreen[str | None]):
         self.dismiss(name if name else None)
 
 
-class WorkspaceModeScreen(ModalScreen[str | None]):
+class WorkspaceModeScreen(DialogScreen[str | None]):
     """One-time choice for an unclassified workspace."""
 
     CSS = """
-    WorkspaceModeScreen { align: center middle; }
-    #mode-dialog { width: 60; height: auto; border: solid $primary; background: $surface; padding: 1 2; }
-    #mode-title { height: auto; text-style: bold; color: $accent; padding-bottom: 1; }
+    #mode-dialog { width: 60; height: auto; }
+    #mode-title { padding-bottom: 1; }
     #mode-help { height: auto; color: $text-muted; padding-bottom: 1; }
     #mode-buttons { height: auto; align-horizontal: right; }
     .mode-button { width: 12; }
@@ -287,9 +264,11 @@ class WorkspaceModeScreen(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="mode-dialog"):
-            yield Label("What is this workspace for?", id="mode-title")
-            yield Label("Study adds local Markdown search and a knowledge graph. Coding keeps the project view.", id="mode-help")
+        with Vertical(id="mode-dialog", classes="dialog"):
+            yield Label("What is this workspace for?", id="mode-title", classes="dialog-title")
+            yield Label(
+                "Study adds local Markdown search and a knowledge graph. Coding keeps the project view.", id="mode-help"
+            )
             with Horizontal(id="mode-buttons"):
                 yield Button("Study", id="study", variant="primary", classes="mode-button")
                 yield Button("Coding", id="coding", classes="mode-button")
@@ -301,12 +280,11 @@ class WorkspaceModeScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class KnowledgeScreen(ModalScreen[Path | None]):
+class KnowledgeScreen(DialogScreen[Path | None]):
     """Browse the local Markdown knowledge graph; `e` edits the selected note externally."""
 
     CSS = """
-    KnowledgeScreen { align: center middle; }
-    #knowledge-dialog { width: 94%; height: 92%; border: solid $primary; background: $surface; padding: 1; }
+    #knowledge-dialog { width: 94%; height: 92%; padding: 1; }
     #knowledge-body { height: 1fr; }
     #knowledge-graph { width: 50%; border: round $secondary; }
     #knowledge-preview { width: 1fr; border: round $secondary; padding: 0 1; }
@@ -327,7 +305,7 @@ class KnowledgeScreen(ModalScreen[Path | None]):
         self.preview_source = self.PLACEHOLDER
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="knowledge-dialog"):
+        with Vertical(id="knowledge-dialog", classes="dialog"):
             with Horizontal(id="knowledge-body"):
                 with VerticalScroll(id="knowledge-preview"):
                     yield Static(self.PLACEHOLDER, id="knowledge-preview-body")
@@ -335,10 +313,8 @@ class KnowledgeScreen(ModalScreen[Path | None]):
             yield Label("", id="knowledge-status")
 
     def on_mount(self) -> None:
-        from handoff.knowledge import KnowledgeIndex
         self.index = KnowledgeIndex.build(self.workspace)
 
-        # Update GraphView with the index
         graph = self.query_one("#knowledge-graph", GraphView)
         graph.index = self.index
         graph.refresh()
@@ -354,8 +330,8 @@ class KnowledgeScreen(ModalScreen[Path | None]):
         """Handle graph node selection."""
         try:
             self._select(event.path)
-        except Exception:
-            return
+        except NoMatches:
+            pass
 
     def _select(self, path: Path) -> None:
         """Select a note and display it in the preview."""
@@ -370,7 +346,6 @@ class KnowledgeScreen(ModalScreen[Path | None]):
         self.query_one("#knowledge-preview-body", Static).update(RichMarkdown(note.content))
         self.query_one("#knowledge-preview", VerticalScroll).scroll_home(animate=False)
 
-        # Update graph
         graph = self.query_one("#knowledge-graph", GraphView)
         graph.selected_path = path
         graph.refresh()
@@ -403,23 +378,9 @@ class WeeklyReviewScreen(PagedTextScreen):
     STATUS_SELECTOR = "#weekly-page-status"
 
     CSS = """
-    WeeklyReviewScreen {
-        align: center middle;
-    }
-
     #weekly-dialog {
         width: 88;
         height: 90%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    #weekly-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
-        padding: 0;
     }
 
     #weekly-page-status {
@@ -480,8 +441,8 @@ class WeeklyReviewScreen(PagedTextScreen):
 
     def compose(self) -> ComposeResult:
         label = week_label(self.year, self.week)
-        with Vertical(id="weekly-dialog"):
-            yield Label(f"Weekly Review — {label}", id="weekly-title")
+        with Vertical(id="weekly-dialog", classes="dialog"):
+            yield Label(f"Weekly Review — {label}", id="weekly-title", classes="dialog-title")
             yield Label("", id="weekly-page-status")
             with ContentSwitcher(initial="page-summary", id="weekly-pages"):
                 with Vertical(id="page-summary", classes="weekly-page"):
@@ -532,8 +493,30 @@ class WeeklyReviewScreen(PagedTextScreen):
         self.dismiss(None)
 
     def action_save(self) -> None:
-        self.dismiss({
-            "summary": self.query_one("#weekly-summary", TextArea).text,
-            "highlights": self.query_one("#weekly-highlights", TextArea).text,
-            "carry_forwards": self.query_one("#weekly-carry", TextArea).text,
-        })
+        self.dismiss(
+            {
+                "summary": self.query_one("#weekly-summary", TextArea).text,
+                "highlights": self.query_one("#weekly-highlights", TextArea).text,
+                "carry_forwards": self.query_one("#weekly-carry", TextArea).text,
+            }
+        )
+
+
+class SyncScreen(DialogScreen[None]):
+    """Non-dismissable status box shown while notes sync; the caller pops it."""
+
+    CSS = """
+    #sync-dialog { width: 50; height: auto; }
+    """
+
+    def __init__(self, title: str = "Syncing handoff notes") -> None:
+        super().__init__()
+        self._title = title
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sync-dialog", classes="dialog"):
+            yield Label(self._title, id="sync-title", classes="dialog-title")
+            yield Label("Connecting...", id="sync-detail")
+
+    def set_detail(self, text: str) -> None:
+        self.query_one("#sync-detail", Label).update(text)

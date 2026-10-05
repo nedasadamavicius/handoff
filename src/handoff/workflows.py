@@ -5,21 +5,10 @@ from datetime import datetime
 from pathlib import Path
 
 from handoff.documents import render_last_markdown, render_next_markdown
-from handoff.source_tags import strip_numeric_tags
+from handoff.paths import unique_path
 from handoff.session import render_session_log, session_filename, update_day_log
+from handoff.source_tags import strip_numeric_tags
 from handoff.workspace import Workspace
-
-
-def _available_session_path(workspace: Workspace, ended_at: datetime) -> Path:
-    """Return a collision-free session path for the supplied end time."""
-    filename = session_filename(ended_at)
-    path = workspace.sessions_dir / filename
-    counter = 2
-    while path.exists():
-        filename = f"{session_filename(ended_at).removesuffix('.md')}-{counter}.md"
-        path = workspace.sessions_dir / filename
-        counter += 1
-    return path
 
 
 def save_workspace_handoff(
@@ -36,7 +25,7 @@ def save_workspace_handoff(
     next_text = render_next_markdown(fields["next"])
 
     workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
-    session_path = _available_session_path(workspace, ended_at)
+    session_path = unique_path(workspace.sessions_dir, session_filename(ended_at).removesuffix(".md"))
     session_path.write_text(
         render_session_log(
             workspace=workspace.name,
@@ -51,14 +40,14 @@ def save_workspace_handoff(
         ),
         encoding="utf-8",
     )
+    completed_without_file_tags = strip_numeric_tags(fields["done"])
     update_day_log(
         path=workspace.day_file(ended_at.date()),
         workspace=workspace.name,
         ended_at=ended_at,
         session_file=session_path.name,
         summary=fields["summary"],
-        # [n] tags index this session's file list; the day log merges sessions.
-        completed=strip_numeric_tags(fields["done"]),
+        completed=completed_without_file_tags,
         open_issues=fields["open"],
     )
     workspace.last_file.write_text(last_text.rstrip() + "\n", encoding="utf-8")

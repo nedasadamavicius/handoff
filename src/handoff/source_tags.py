@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 
-
 _TAG = re.compile(r"([ 	]*)\[([^\[\]\s()]+)\](?!\()")
 _TRAILING_NUMERIC = re.compile(r"(?:\[\d+\])+\s*$")
 
@@ -38,7 +37,6 @@ def _lookup(path: str, files: list[str]) -> int | None:
         if item == key:
             return index
     for index, item in enumerate(files, 1):
-        # Untracked directories appear in git status as "dir/".
         if item.endswith("/") and key.startswith(item):
             return index
     return None
@@ -58,10 +56,10 @@ def resolve_source_tags(text: str, files: list[str]) -> tuple[str, list[str]]:
     def replace(match: re.Match[str]) -> str:
         lead, token = match.group(1), match.group(2)
         if token.isdigit():
-            dropped.append(token)  # agents must not guess numbers
+            dropped.append(token)
             return ""
         if not _looks_like_path(token):
-            return match.group(0)  # e.g. a [x] checkbox
+            return match.group(0)
         index = _lookup(token, files)
         if index is None:
             dropped.append(token)

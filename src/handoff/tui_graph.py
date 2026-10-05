@@ -1,49 +1,98 @@
 """Mouse-driven note graph drawn on a Braille dot canvas.
 
-Each terminal cell is a 2x4 grid of Braille dots, four times the resolution of
-block glyphs, so links are thin smooth lines and nodes are round dot discs.
 Every cell has one foreground colour, chosen by what matters most in it
-(selected note > linked note > other note > highlighted link > link). Nodes
-live in world coordinates so the view can pan, zoom and be rearranged by
-dragging without re-running the layout.
+(selected note > linked note > other note > highlighted link > link). Nodes live in
+world coordinates so the view can pan, zoom and be rearranged by dragging without
+re-running the layout.
 """
 
 from __future__ import annotations
 
 import math
-import time
+from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 
-from rich.color import Color
+from rich.color import Color, ColorParseError
 from rich.style import Style
 from rich.text import Text
 from textual.message import Message
 from textual.widget import Widget
 
+from handoff.braille_canvas import DOTS_PER_CELL_X, DOTS_PER_CELL_Y, BrailleCanvas
+from handoff.graph_layout import compute_node_positions
+
 RGB = tuple[float, float, float]
-BRAILLE_BITS = ((0x01, 0x08), (0x02, 0x10), (0x04, 0x20), (0x40, 0x80))  # [dot row][dot column]
-LAYOUT_SPACING = 1.8  # multiplier on the ideal node distance; higher spreads clusters out
-LAYOUT_GRAVITY = 0.15  # pull towards the centre; keeps unlinked notes on a tidy outer ring
-LAYOUT_BUDGET_SECONDS = 0.4  # keep `g` responsive on big vaults; the layout just stops early
+Cell = tuple[str, Style]
 
-# Colour priority for a cell that holds several things.
-_LINK, _HOT_LINK, _NODE, _LINKED_NODE, _SELECTED_NODE = 1, 2, 3, 4, 5
+MINIMUM_RENDER_WIDTH = 10
+MINIMUM_RENDER_HEIGHT = 3
+LABEL_RESERVED_PADDING_CELLS = 8
+VERTICAL_FIT_PADDING_DOTS = 12
+MAXIMUM_FIT_ZOOM = 3.0
+NODE_HIT_PADDING_DOTS = 2
+ZOOM_IN_FACTOR = 1.25
+ZOOM_OUT_FACTOR = 0.8
+LINK_BLEND_ALPHA = 0.4
+NODE_BLEND_ALPHA = 0.8
+UNLINKED_LABEL_BLEND_ALPHA = 0.6
 
 
-def _mix(base: RGB, top: RGB, alpha: float) -> RGB:
-    return tuple(b + (t - b) * alpha for b, t in zip(base, top))
+class CellPriority(IntEnum):
+    LINK = 1
+    HOT_LINK = 2
+    NODE = 3
+    LINKED_NODE = 4
+    SELECTED_NODE = 5
 
 
-def _rgb(value: str, fallback: RGB) -> RGB:
+@dataclass(frozen=True)
+class GraphColors:
+    surface: RGB
+    primary: RGB
+    accent: RGB
+    secondary: RGB
+    foreground: RGB
+
+    def priority_palette(self) -> dict[CellPriority, RGB]:
+        return {
+            CellPriority.LINK: _blend(self.surface, self.secondary, LINK_BLEND_ALPHA),
+            CellPriority.HOT_LINK: self.primary,
+            CellPriority.NODE: _blend(self.surface, self.secondary, NODE_BLEND_ALPHA),
+            CellPriority.LINKED_NODE: self.accent,
+            CellPriority.SELECTED_NODE: self.primary,
+        }
+
+
+@dataclass
+class NodeDrag:
+    path: Path
+    grab_offset_dots: tuple[float, float]
+    moved: bool = False
+
+
+@dataclass
+class PanDrag:
+    start_cell: tuple[int, int]
+    start_pan: tuple[float, float]
+    moved: bool = False
+
+
+def _blend(base: RGB, top: RGB, alpha: float) -> RGB:
+    return tuple(base_channel + (top_channel - base_channel) * alpha for base_channel, top_channel in zip(base, top))
+
+
+def _parse_rgb(value: str, fallback: RGB) -> RGB:
     try:
         triplet = Color.parse(value).get_truecolor()
-    except Exception:
+    except ColorParseError:
         return fallback
     return (float(triplet.red), float(triplet.green), float(triplet.blue))
 
 
 def _hex(color: RGB) -> str:
-    return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, round(c))) for c in color))
+    red, green, blue = (max(0, min(255, round(channel))) for channel in color)
+    return f"#{red:02x}{green:02x}{blue:02x}"
 
 
 class GraphView(Widget):
@@ -56,9 +105,9 @@ class GraphView(Widget):
         background: $surface;
     }
     """
-    ALLOW_SELECT = False  # dragging pans or moves nodes; it must not start a text selection
-    LABEL_WIDTH = 24  # preferred label width; titles are not truncated to this value
-    MIN_ZOOM = 0.1  # dots per world unit
+    ALLOW_SELECT = False
+    LABEL_WIDTH = 24
+    MIN_ZOOM = 0.1
     MAX_ZOOM = 12.0
 
     class NodeSelected(Message):
@@ -75,337 +124,286 @@ class GraphView(Widget):
         self.can_focus = False
         self.world: dict[Path, tuple[float, float]] = {}
         self.zoom = 1.0
-        self.pan = (0.0, 0.0)  # world coordinates at the canvas's top-left dot
+        self.pan = (0.0, 0.0)
         self.dragged: set[Path] = set()
-        self._laid_out_for = None
+        self._laid_out_index = None
         self._fitted = False
-        self._drag: list | None = None
+        self._drag: NodeDrag | PanDrag | None = None
         self._style_cache: dict[tuple, Style] = {}
         self._hidden_labels: set[Path] = set()
 
-    # ---- coordinates -------------------------------------------------
-    # World units map to Braille dots; a cell is 2 dots wide and 4 dots tall, and a dot is
-    # roughly square on screen, so both axes share one zoom factor.
-    def _to_dots(self, wx: float, wy: float) -> tuple[float, float]:
-        return (wx - self.pan[0]) * self.zoom, (wy - self.pan[1]) * self.zoom
+    @property
+    def _has_notes(self) -> bool:
+        return bool(self.index and self.index.notes)
 
-    def _to_world(self, dx: float, dy: float) -> tuple[float, float]:
-        return dx / self.zoom + self.pan[0], dy / self.zoom + self.pan[1]
+    @property
+    def _is_large_enough(self) -> bool:
+        return self.size.width >= MINIMUM_RENDER_WIDTH and self.size.height >= MINIMUM_RENDER_HEIGHT
+
+    def _to_dots(self, world_x: float, world_y: float) -> tuple[float, float]:
+        return (world_x - self.pan[0]) * self.zoom, (world_y - self.pan[1]) * self.zoom
+
+    def _to_world(self, dot_x: float, dot_y: float) -> tuple[float, float]:
+        return dot_x / self.zoom + self.pan[0], dot_y / self.zoom + self.pan[1]
 
     @staticmethod
-    def _cell_to_dots(x: int, y: int) -> tuple[float, float]:
-        return x * 2 + 1.0, y * 4 + 2.0
+    def _cell_center_in_dots(column: int, row: int) -> tuple[float, float]:
+        return column * DOTS_PER_CELL_X + DOTS_PER_CELL_X / 2, row * DOTS_PER_CELL_Y + DOTS_PER_CELL_Y / 2
 
     def _radius(self, path: Path) -> float:
         """Disc radius in dots, growing with how many notes link here."""
-        note = self.index.notes[path]
-        degree = len(note.outgoing) + len(note.incoming)
-        return max(1.2, min(6.0, (1.5 + 0.35 * degree) * self.zoom ** 0.4))
+        link_count = self.index.notes[path].link_count
+        return max(1.2, min(6.0, (1.5 + 0.35 * link_count) * self.zoom**0.4))
 
     def _radius_cells(self, path: Path) -> int:
-        return math.ceil(self._radius(path) / 2)
+        return math.ceil(self._radius(path) / DOTS_PER_CELL_X)
 
     def _label(self, path: Path) -> str:
         return self.index.notes[path].title
 
-    def _labelled(self) -> set[Path]:
-        """Nodes whose title is drawn: every node, unless the last render had no room for it."""
+    def _labelled_paths(self) -> set[Path]:
         return set(self.world) - self._hidden_labels
 
     @property
     def node_positions(self) -> dict[Path, tuple[int, int]]:
         """Left cell of each node's hit box (disc plus visible title), content-area relative."""
         self._ensure_layout()
-        result = {}
-        for path, place in self.world.items():
-            dx, dy = self._to_dots(*place)
-            result[path] = (round(dx / 2) - self._radius_cells(path), round(dy / 4))
-        return result
+        positions = {}
+        for path, world_position in self.world.items():
+            dot_x, dot_y = self._to_dots(*world_position)
+            positions[path] = (
+                round(dot_x / DOTS_PER_CELL_X) - self._radius_cells(path),
+                round(dot_y / DOTS_PER_CELL_Y),
+            )
+        return positions
 
-    def _node_width(self, path: Path) -> int:
+    def node_width(self, path: Path) -> int:
         width = 2 * self._radius_cells(path) + 1
-        if path in self._labelled():
+        if path in self._labelled_paths():
             width += 1 + len(self._label(path))
         return width
-
-    def _color(self, name: str, fallback: RGB) -> RGB:
-        try:
-            value = self.app.theme_variables.get(name)
-        except Exception:
-            value = None
-        return _rgb(value, fallback) if value else fallback
 
     def select(self, path: Path | None) -> None:
         self.selected_path = path
         self.refresh()
 
-    # ---- layout ------------------------------------------------------
+    def _theme_color(self, name: str, fallback: RGB) -> RGB:
+        value = self.app.theme_variables.get(name)
+        return _parse_rgb(value, fallback) if value else fallback
+
+    def _theme_colors(self) -> GraphColors:
+        return GraphColors(
+            surface=self._theme_color("surface", (23.0, 23.0, 23.0)),
+            primary=self._theme_color("primary", (220.0, 20.0, 60.0)),
+            accent=self._theme_color("accent", (192.0, 57.0, 43.0)),
+            secondary=self._theme_color("secondary", (139.0, 0.0, 0.0)),
+            foreground=self._theme_color("foreground", (232.0, 232.0, 232.0)),
+        )
+
     def _ensure_layout(self) -> None:
-        if not self.index or not self.index.notes:
+        if not self._has_notes:
             self.world = {}
             return
-        if self._laid_out_for is not self.index:
-            self._laid_out_for = self.index
-            self._compute_world()
+        if self._laid_out_index is not self.index:
+            self._laid_out_index = self.index
+            self.world = compute_node_positions(self.index)
             self._fitted = False
-        if not self._fitted and self.size.width >= 10 and self.size.height >= 3:
+        if not self._fitted and self._is_large_enough:
             self.fit()
-
-    def _compute_world(self) -> None:
-        """Force-directed layout (Fruchterman-Reingold) inside a circular boundary.
-
-        Linked notes pull together. Truly disconnected notes are kept out of the main
-        cluster and placed on a quiet outer ring so they read as standalone notes.
-        """
-        paths = sorted(self.index.notes, key=lambda p: str(p).lower())
-        degree = {p: len(self.index.notes[p].outgoing) + len(self.index.notes[p].incoming) for p in paths}
-        orphans = [path for path in paths if degree[path] == 0]
-        layout_paths = [path for path in paths if degree[path] > 0] or paths
-        n = len(layout_paths)
-        span = max(80.0, math.sqrt(n) * 40)
-        self.world = {}
-        if n == 1:
-            self.world[layout_paths[0]] = (span / 2, span / 2)
-            if orphans:
-                self.world.update(self._outer_ring(orphans, span))
-            return
-        pos = {}
-        for i, path in enumerate(layout_paths):  # deterministic golden-angle spiral start
-            angle = i * 2.399963
-            radius = math.sqrt((i + 0.5) / n) * span / 2
-            pos[path] = [span / 2 + math.cos(angle) * radius, span / 2 + math.sin(angle) * radius]
-        layout_set = set(layout_paths)
-        edges = [(a, b) for a, note in self.index.notes.items() for b in note.outgoing if a in layout_set and b in layout_set]
-        k = math.sqrt(span * span / n) * LAYOUT_SPACING
-        temperature = span / 8
-        started = time.monotonic()
-        for _ in range(max(20, min(150, 30000 // n))):
-            if time.monotonic() - started > LAYOUT_BUDGET_SECONDS:
-                break
-            force = {path: [0.0, 0.0] for path in layout_paths}
-            for i, a in enumerate(layout_paths):
-                for b in layout_paths[i + 1:]:
-                    dx = pos[a][0] - pos[b][0]
-                    dy = pos[a][1] - pos[b][1]
-                    dist = max(0.01, math.hypot(dx, dy))
-                    push = k * k / dist
-                    force[a][0] += dx / dist * push
-                    force[a][1] += dy / dist * push
-                    force[b][0] -= dx / dist * push
-                    force[b][1] -= dy / dist * push
-            for a, b in edges:
-                dx = pos[a][0] - pos[b][0]
-                dy = pos[a][1] - pos[b][1]
-                dist = max(0.01, math.hypot(dx, dy))
-                # Hubs pull each neighbour less, so well-linked notes do not collapse onto them.
-                pull = dist * dist / k / math.sqrt(1 + max(degree[a], degree[b]) / 2)
-                force[a][0] -= dx / dist * pull
-                force[a][1] -= dy / dist * pull
-                force[b][0] += dx / dist * pull
-                force[b][1] += dy / dist * pull
-            for path in layout_paths:
-                force[path][0] += (span / 2 - pos[path][0]) * LAYOUT_GRAVITY
-                force[path][1] += (span / 2 - pos[path][1]) * LAYOUT_GRAVITY
-                fx, fy = force[path]
-                length = max(0.01, math.hypot(fx, fy))
-                step = min(length, temperature)
-                nx = pos[path][0] + fx / length * step
-                ny = pos[path][1] + fy / length * step
-                off = math.hypot(nx - span / 2, ny - span / 2)
-                if off > span / 2:  # circular boundary
-                    nx = span / 2 + (nx - span / 2) * (span / 2) / off
-                    ny = span / 2 + (ny - span / 2) * (span / 2) / off
-                pos[path] = [nx, ny]
-            temperature *= 0.95
-        xs = [p[0] for p in pos.values()]
-        ys = [p[1] for p in pos.values()]
-        scale = (span * 0.58) / max(1.0, max(xs) - min(xs), max(ys) - min(ys))
-        centre_x = sum(xs) / len(xs)
-        centre_y = sum(ys) / len(ys)
-        self.world = {
-            path: (span / 2 + (pos[path][0] - centre_x) * scale, span / 2 + (pos[path][1] - centre_y) * scale)
-            for path in layout_paths
-        }
-        if orphans:
-            self.world.update(self._outer_ring(orphans, span))
-
-    @staticmethod
-    def _outer_ring(paths: list[Path], span: float) -> dict[Path, tuple[float, float]]:
-        """Place disconnected notes beyond the connected cluster."""
-        radius = span * 0.72
-        count = len(paths)
-        return {
-            path: (
-                span / 2 + math.cos(-math.pi / 2 + i * 2 * math.pi / count) * radius,
-                span / 2 + math.sin(-math.pi / 2 + i * 2 * math.pi / count) * radius,
-            )
-            for i, path in enumerate(paths)
-        }
 
     def fit(self) -> None:
         """Zoom and pan so every node (and its title, when shown) is visible."""
-        if not self.world or self.size.width < 10 or self.size.height < 3:
+        if not self.world or not self._is_large_enough:
             return
-        xs = [x for x, _ in self.world.values()]
-        ys = [y for _, y in self.world.values()]
-        span_x, span_y = max(xs) - min(xs), max(ys) - min(ys)
+        world_xs = [world_x for world_x, _ in self.world.values()]
+        world_ys = [world_y for _, world_y in self.world.values()]
+        world_width, world_height = max(world_xs) - min(world_xs), max(world_ys) - min(world_ys)
         longest_label = max((len(self._label(path)) for path in self.world), default=self.LABEL_WIDTH)
-        label_width = min(longest_label, max(self.LABEL_WIDTH, self.size.width // 2))
-        label_dots = (label_width + 8) * 2
-        width_dots, height_dots = self.size.width * 2, self.size.height * 4
-        fit_x = (width_dots - label_dots) / span_x if span_x else self.MAX_ZOOM
-        fit_y = (height_dots - 12) / span_y if span_y else self.MAX_ZOOM
-        self.zoom = max(self.MIN_ZOOM, min(3.0, fit_x, fit_y))
-        margin_x = (width_dots - span_x * self.zoom - label_dots) / 2 + 8
-        margin_y = (height_dots - span_y * self.zoom) / 2
-        self.pan = (min(xs) - margin_x / self.zoom, min(ys) - margin_y / self.zoom)
+        label_cells = min(longest_label, max(self.LABEL_WIDTH, self.size.width // 2))
+        label_dots = (label_cells + LABEL_RESERVED_PADDING_CELLS) * DOTS_PER_CELL_X
+        canvas_width_dots = self.size.width * DOTS_PER_CELL_X
+        canvas_height_dots = self.size.height * DOTS_PER_CELL_Y
+        zoom_to_fit_width = (canvas_width_dots - label_dots) / world_width if world_width else self.MAX_ZOOM
+        zoom_to_fit_height = (
+            (canvas_height_dots - VERTICAL_FIT_PADDING_DOTS) / world_height if world_height else self.MAX_ZOOM
+        )
+        self.zoom = max(self.MIN_ZOOM, min(MAXIMUM_FIT_ZOOM, zoom_to_fit_width, zoom_to_fit_height))
+        margin_x_dots = (canvas_width_dots - world_width * self.zoom - label_dots) / 2 + LABEL_RESERVED_PADDING_CELLS
+        margin_y_dots = (canvas_height_dots - world_height * self.zoom) / 2
+        self.pan = (min(world_xs) - margin_x_dots / self.zoom, min(world_ys) - margin_y_dots / self.zoom)
         self._fitted = True
         self.refresh()
 
-    # ---- drawing -----------------------------------------------------
     def render(self) -> Text:
-        width, height = self.size.width, self.size.height
-        if not self.index or not self.index.notes:
+        if not self._has_notes:
             return Text("No notes")
-        if width < 10 or height < 3:
+        if not self._is_large_enough:
             return Text("Graph too small")
         self._ensure_layout()
 
-        surface = self._color("surface", (23.0, 23.0, 23.0))
-        primary = self._color("primary", (220.0, 20.0, 60.0))
-        accent = self._color("accent", (192.0, 57.0, 43.0))
-        secondary = self._color("secondary", (139.0, 0.0, 0.0))
-        foreground = self._color("foreground", (232.0, 232.0, 232.0))
-        palette = {
-            _LINK: _mix(surface, secondary, 0.4),
-            _HOT_LINK: primary,
-            _NODE: _mix(surface, secondary, 0.8),
-            _LINKED_NODE: accent,
-            _SELECTED_NODE: primary,
-        }
-        selected = self.index.notes.get(self.selected_path) if self.selected_path else None
-        linked = set(selected.outgoing) | set(selected.incoming) if selected else set()
+        colors = self._theme_colors()
+        linked_paths = self._paths_linked_to_selection()
+        centers = {path: self._to_dots(*world_position) for path, world_position in self.world.items()}
+        canvas = self._draw_canvas(centers, linked_paths)
+        rows = self._rows_from_canvas(canvas, colors)
+        self._place_labels(rows, centers, linked_paths, colors)
+        return self._text_from_rows(rows)
 
-        bits = [[0] * width for _ in range(height)]
-        rank = [[0] * width for _ in range(height)]
-        centers = {path: self._to_dots(*place) for path, place in self.world.items()}
+    def _paths_linked_to_selection(self) -> set[Path]:
+        selected_note = self.index.notes.get(self.selected_path) if self.selected_path else None
+        return set(selected_note.outgoing) | set(selected_note.incoming) if selected_note else set()
 
-        def plot(dx: int, dy: int, level: int) -> None:
-            cx, cy = dx >> 1, dy >> 2
-            if 0 <= cx < width and 0 <= cy < height:
-                bits[cy][cx] |= BRAILLE_BITS[dy & 3][dx & 1]
-                if level > rank[cy][cx]:
-                    rank[cy][cx] = level
-
+    def _draw_canvas(self, centers: dict[Path, tuple[float, float]], linked_paths: set[Path]) -> BrailleCanvas:
+        canvas = BrailleCanvas(self.size.width, self.size.height)
         for path, note in self.index.notes.items():
             for target in note.outgoing:
                 if target in centers:
-                    hot = self.selected_path in (path, target)
-                    self._draw_line(plot, centers[path], centers[target], _HOT_LINK if hot else _LINK)
+                    touches_selection = self.selected_path in (path, target)
+                    priority = CellPriority.HOT_LINK if touches_selection else CellPriority.LINK
+                    canvas.draw_line(centers[path], centers[target], priority)
         for path, center in centers.items():
-            level = _SELECTED_NODE if path == self.selected_path else _LINKED_NODE if path in linked else _NODE
-            self._draw_disc(plot, center, self._radius(path), level)
+            canvas.draw_disc(center, self._radius(path), self._node_priority(path, linked_paths))
+        return canvas
 
-        cells: list[list[tuple[str, Style]]] = []
-        blank = self._style(None, surface)
-        for y in range(height):
-            row = []
-            for x in range(width):
-                if bits[y][x]:
-                    row.append((chr(0x2800 + bits[y][x]), self._style(palette[rank[y][x]], surface)))
+    def _node_priority(self, path: Path, linked_paths: set[Path]) -> CellPriority:
+        if path == self.selected_path:
+            return CellPriority.SELECTED_NODE
+        return CellPriority.LINKED_NODE if path in linked_paths else CellPriority.NODE
+
+    def _rows_from_canvas(self, canvas: BrailleCanvas, colors: GraphColors) -> list[list[Cell]]:
+        blank_cell = (" ", self._style(None, colors.surface))
+        palette = colors.priority_palette()
+        rows = []
+        for row in range(canvas.height_cells):
+            cells = []
+            for column in range(canvas.width_cells):
+                glyph = canvas.glyph_at(column, row)
+                if glyph is None:
+                    cells.append(blank_cell)
                 else:
-                    row.append((" ", blank))
-            cells.append(row)
+                    color = palette[CellPriority(canvas.priority_at(column, row))]
+                    cells.append((glyph, self._style(color, colors.surface)))
+            rows.append(cells)
+        return rows
 
-        # Titles beside the discs: important notes first, then the best connected; crowded ones are skipped.
-        taken: set[tuple[int, int]] = set()
-        for path, (dx, dy) in centers.items():
-            r = self._radius(path)
-            for row in range(math.floor((dy - r) / 4), math.floor((dy + r) / 4) + 1):
-                taken.update((col, row) for col in range(math.floor((dx - r) / 2), math.floor((dx + r) / 2) + 1))
-        degree = {p: len(self.index.notes[p].outgoing) + len(self.index.notes[p].incoming) for p in centers}
-        order = sorted(centers, key=lambda p: (p != self.selected_path, p not in linked, -degree[p], str(p)))
+    def _place_labels(
+        self,
+        rows: list[list[Cell]],
+        centers: dict[Path, tuple[float, float]],
+        linked_paths: set[Path],
+        colors: GraphColors,
+    ) -> None:
+        """Write titles beside the discs, most important notes first; crowded ones are hidden."""
+        occupied = self._cells_covered_by_discs(centers)
         self._hidden_labels = set()
-        for path in order:
-            dx, dy = centers[path]
+        for path in self._paths_by_label_importance(centers, linked_paths):
             label = self._label(path)
-            right_x = round(dx / 2) + self._radius_cells(path) + 1
-            left_x = round(dx / 2) - self._radius_cells(path) - len(label) - 1
-            y = round(dy / 4)
-            placed = False
-            for x in (right_x, left_x):
-                for row in (y, y + 1, y - 1):  # fall back to rows beside the disc when crowded
-                    span = {(x + i, row) for i in range(-1, len(label) + 1)}
-                    if 0 <= x and x + len(label) <= width and 0 <= row < height and not span & taken:
-                        y = row
-                        placed = True
-                        break
-                if placed:
-                    break
-            if not placed:
+            spot = self._find_label_spot(path, centers[path], len(label), occupied)
+            if spot is None:
                 self._hidden_labels.add(path)
                 continue
-            taken |= span
-            if path == self.selected_path:
-                style = self._style(primary, surface, bold=True)
-            elif path in linked:
-                style = self._style(foreground, surface, bold=True)
-            else:
-                style = self._style(_mix(surface, foreground, 0.6), surface, dim=True)
-            for i, ch in enumerate(label):
-                if 0 <= x + i < width:
-                    cells[y][x + i] = (ch, style)
+            left_column, row, footprint = spot
+            occupied |= footprint
+            style = self._label_style(path, linked_paths, colors)
+            for offset, character in enumerate(label):
+                if 0 <= left_column + offset < self.size.width:
+                    rows[row][left_column + offset] = (character, style)
 
-        # One span per run of identical style keeps Rich's work (and the terminal output) small.
+    def _paths_by_label_importance(
+        self, centers: dict[Path, tuple[float, float]], linked_paths: set[Path]
+    ) -> list[Path]:
+        return sorted(
+            centers,
+            key=lambda path: (
+                path != self.selected_path,
+                path not in linked_paths,
+                -self.index.notes[path].link_count,
+                str(path),
+            ),
+        )
+
+    def _cells_covered_by_discs(self, centers: dict[Path, tuple[float, float]]) -> set[tuple[int, int]]:
+        covered: set[tuple[int, int]] = set()
+        for path, (dot_x, dot_y) in centers.items():
+            radius = self._radius(path)
+            for row in range(
+                math.floor((dot_y - radius) / DOTS_PER_CELL_Y), math.floor((dot_y + radius) / DOTS_PER_CELL_Y) + 1
+            ):
+                covered.update(
+                    (column, row)
+                    for column in range(
+                        math.floor((dot_x - radius) / DOTS_PER_CELL_X),
+                        math.floor((dot_x + radius) / DOTS_PER_CELL_X) + 1,
+                    )
+                )
+        return covered
+
+    def _find_label_spot(
+        self, path: Path, center: tuple[float, float], label_length: int, occupied: set[tuple[int, int]]
+    ) -> tuple[int, int, set[tuple[int, int]]] | None:
+        """Where a title fits as (left column, row, footprint): right of the disc first, else left; None if crowded."""
+        center_column = round(center[0] / DOTS_PER_CELL_X)
+        center_row = round(center[1] / DOTS_PER_CELL_Y)
+        radius_cells = self._radius_cells(path)
+        for left_column in (
+            center_column + radius_cells + 1,
+            center_column - radius_cells - label_length - 1,
+        ):
+            for row in (center_row, center_row + 1, center_row - 1):
+                footprint = {(left_column + offset, row) for offset in range(-1, label_length + 1)}
+                fits = (
+                    0 <= left_column and left_column + label_length <= self.size.width and 0 <= row < self.size.height
+                )
+                if fits and not footprint & occupied:
+                    return left_column, row, footprint
+        return None
+
+    def _label_style(self, path: Path, linked_paths: set[Path], colors: GraphColors) -> Style:
+        if path == self.selected_path:
+            return self._style(colors.primary, colors.surface, bold=True)
+        if path in linked_paths:
+            return self._style(colors.foreground, colors.surface, bold=True)
+        faded = _blend(colors.surface, colors.foreground, UNLINKED_LABEL_BLEND_ALPHA)
+        return self._style(faded, colors.surface, dim=True)
+
+    @staticmethod
+    def _text_from_rows(rows: list[list[Cell]]) -> Text:
+        """One span per run of identical style keeps Rich's work, and the terminal output, small."""
         text = Text(no_wrap=True, overflow="crop", end="")
-        for y, row in enumerate(cells):
-            run: list[str] = []
+        for row_number, row in enumerate(rows):
+            run_characters: list[str] = []
             run_style = row[0][1]
-            for ch, style in row:
+            for character, style in row:
                 if style is not run_style:
-                    text.append("".join(run), run_style)
-                    run, run_style = [], style
-                run.append(ch)
-            text.append("".join(run), run_style)
-            if y < height - 1:
+                    text.append("".join(run_characters), run_style)
+                    run_characters, run_style = [], style
+                run_characters.append(character)
+            text.append("".join(run_characters), run_style)
+            if row_number < len(rows) - 1:
                 text.append("\n")
         return text
 
-    def _style(self, fg: RGB | None, bg: RGB, bold: bool = False, dim: bool = False) -> Style:
-        key = (fg, bg, bold, dim)
+    def _style(self, foreground: RGB | None, background: RGB, bold: bool = False, dim: bool = False) -> Style:
+        key = (foreground, background, bold, dim)
         style = self._style_cache.get(key)
         if style is None:
-            style = Style(color=_hex(fg) if fg else None, bgcolor=_hex(bg), bold=bold or None, dim=dim or None)
+            style = Style(
+                color=_hex(foreground) if foreground else None,
+                bgcolor=_hex(background),
+                bold=bold or None,
+                dim=dim or None,
+            )
             self._style_cache[key] = style
         return style
 
-    @staticmethod
-    def _draw_line(plot, start, end, level: int) -> None:
-        """One-dot-wide line between two dot positions."""
-        x0, y0 = start
-        x1, y1 = end
-        steps = max(1, math.ceil(max(abs(x1 - x0), abs(y1 - y0))))
-        for i in range(steps + 1):
-            t = i / steps
-            plot(math.floor(x0 + (x1 - x0) * t), math.floor(y0 + (y1 - y0) * t), level)
-
-    @staticmethod
-    def _draw_disc(plot, center, radius: float, level: int) -> None:
-        cx, cy = center
-        for y in range(math.floor(cy - radius), math.ceil(cy + radius) + 1):
-            for x in range(math.floor(cx - radius), math.ceil(cx + radius) + 1):
-                if math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= radius:
-                    plot(x, y, level)
-
-    # ---- mouse -------------------------------------------------------
-    def _node_at(self, x: int, y: int) -> Path | None:
-        for path, (nx, ny) in self.node_positions.items():
-            if ny == y and nx <= x < nx + self._node_width(path):
+    def _node_at(self, column: int, row: int) -> Path | None:
+        for path, (left_column, node_row) in self.node_positions.items():
+            if node_row == row and left_column <= column < left_column + self.node_width(path):
                 return path
-        dx, dy = self._cell_to_dots(x, y)
-        for path, place in self.world.items():  # the disc itself may span several rows
-            cx, cy = self._to_dots(*place)
-            if math.hypot(dx - cx, dy - cy) <= self._radius(path) + 2:
+        click_x, click_y = self._cell_center_in_dots(column, row)
+        for path, world_position in self.world.items():
+            center_x, center_y = self._to_dots(*world_position)
+            if math.hypot(click_x - center_x, click_y - center_y) <= self._radius(path) + NODE_HIT_PADDING_DOTS:
                 return path
         return None
 
@@ -415,58 +413,66 @@ class GraphView(Widget):
             return
         path = self._node_at(offset.x, offset.y)
         if path is not None:
-            nx, ny = self._to_dots(*self.world[path])
-            dx, dy = self._cell_to_dots(offset.x, offset.y)
-            self._drag = ["node", path, dx - nx, dy - ny, False]
+            node_x, node_y = self._to_dots(*self.world[path])
+            click_x, click_y = self._cell_center_in_dots(offset.x, offset.y)
+            self._drag = NodeDrag(path, (click_x - node_x, click_y - node_y))
         else:
-            self._drag = ["pan", offset.x, offset.y, self.pan, False]
+            self._drag = PanDrag((offset.x, offset.y), self.pan)
         self.capture_mouse()
         event.stop()
 
     def on_mouse_move(self, event) -> None:
         if self._drag is None:
-            return  # no hover effects: a redraw per mouse move is far too costly on Windows pseudo-consoles
-        offset = event.get_content_offset_capture(self)
-        if self._drag[0] == "node":
-            _, path, grab_x, grab_y, _ = self._drag
-            dx, dy = self._cell_to_dots(offset.x, offset.y)
-            place = self._to_world(dx - grab_x, dy - grab_y)
-            if place != self.world[path]:
-                self.world[path] = place
-                self.dragged.add(path)
-                self._drag[4] = True
-                self.refresh()
-        else:
-            _, start_x, start_y, pan0, _ = self._drag
-            pan = (pan0[0] - (offset.x - start_x) * 2 / self.zoom, pan0[1] - (offset.y - start_y) * 4 / self.zoom)
-            if pan != self.pan:
-                self.pan = pan
-                self._drag[4] = True
-                self.refresh()
-
-    def on_mouse_up(self, event) -> None:
-        if self._drag is None:
             return
-        kind, target, moved = self._drag[0], self._drag[1], self._drag[4]
-        self._drag = None
+        offset = event.get_content_offset_capture(self)
+        if isinstance(self._drag, NodeDrag):
+            self._move_dragged_node(self._drag, offset.x, offset.y)
+        else:
+            self._pan_to(self._drag, offset.x, offset.y)
+
+    def _move_dragged_node(self, drag: NodeDrag, column: int, row: int) -> None:
+        click_x, click_y = self._cell_center_in_dots(column, row)
+        grab_x, grab_y = drag.grab_offset_dots
+        new_position = self._to_world(click_x - grab_x, click_y - grab_y)
+        if new_position != self.world[drag.path]:
+            self.world[drag.path] = new_position
+            self.dragged.add(drag.path)
+            drag.moved = True
+            self.refresh()
+
+    def _pan_to(self, drag: PanDrag, column: int, row: int) -> None:
+        start_column, start_row = drag.start_cell
+        new_pan = (
+            drag.start_pan[0] - (column - start_column) * DOTS_PER_CELL_X / self.zoom,
+            drag.start_pan[1] - (row - start_row) * DOTS_PER_CELL_Y / self.zoom,
+        )
+        if new_pan != self.pan:
+            self.pan = new_pan
+            drag.moved = True
+            self.refresh()
+
+    def on_mouse_up(self, _event) -> None:
+        drag, self._drag = self._drag, None
+        if drag is None:
+            return
         self.release_mouse()
-        if kind == "node" and not moved:
-            self.post_message(self.NodeSelected(target))
+        if isinstance(drag, NodeDrag) and not drag.moved:
+            self.post_message(self.NodeSelected(drag.path))
 
     def _zoom_by(self, factor: float, event) -> None:
         offset = event.get_content_offset(self)
         if offset is not None:
-            cx, cy = self._cell_to_dots(offset.x, offset.y)
+            anchor_x, anchor_y = self._cell_center_in_dots(offset.x, offset.y)
         else:
-            cx, cy = self.size.width * 1.0, self.size.height * 2.0
-        wx, wy = self._to_world(cx, cy)
+            anchor_x, anchor_y = self.size.width * 1.0, self.size.height * 2.0
+        world_x, world_y = self._to_world(anchor_x, anchor_y)
         self.zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, self.zoom * factor))
-        self.pan = (wx - cx / self.zoom, wy - cy / self.zoom)
+        self.pan = (world_x - anchor_x / self.zoom, world_y - anchor_y / self.zoom)
         self.refresh()
         event.stop()
 
     def on_mouse_scroll_up(self, event) -> None:
-        self._zoom_by(1.25, event)
+        self._zoom_by(ZOOM_IN_FACTOR, event)
 
     def on_mouse_scroll_down(self, event) -> None:
-        self._zoom_by(0.8, event)
+        self._zoom_by(ZOOM_OUT_FACTOR, event)

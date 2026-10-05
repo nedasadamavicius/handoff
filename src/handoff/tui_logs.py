@@ -5,10 +5,10 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
 from textual.widgets import ContentSwitcher, Label, ListItem, ListView, MarkdownViewer
 
 from handoff.documents import strip_yaml_frontmatter
+from handoff.tui_forms import DialogScreen
 from handoff.workspace import Workspace, preview_file
 
 
@@ -29,26 +29,16 @@ class LogPreview(MarkdownViewer):
         pass
 
 
-class LogBrowserScreen(ModalScreen[Path | None]):
+class LogBrowserScreen(DialogScreen[Path | None]):
     TABS = ["sessions", "days", "weeks"]
 
     CSS = """
-    LogBrowserScreen {
-        align: center middle;
-    }
-
     #log-browser-dialog {
         width: 95%;
         height: 95%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
     }
 
     #log-browser-title {
-        height: auto;
-        text-style: bold;
-        color: $accent;
         padding: 0 0 1 0;
     }
 
@@ -133,8 +123,8 @@ class LogBrowserScreen(ModalScreen[Path | None]):
         self._files: dict[str, list[Path]] = {t: [] for t in self.TABS}
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="log-browser-dialog"):
-            yield Label("Log Browser", id="log-browser-title")
+        with Vertical(id="log-browser-dialog", classes="dialog"):
+            yield Label("Log Browser", id="log-browser-title", classes="dialog-title")
             with Horizontal(id="log-body"):
                 with Vertical(id="log-list-pane", classes="active-pane"):
                     yield Label("", id="log-tab-status")
@@ -150,8 +140,7 @@ class LogBrowserScreen(ModalScreen[Path | None]):
                         id="log-preview",
                     )
             yield Label(
-                "↑↓ navigate · Enter load · → preview · ← list · "
-                "Ctrl+←/→ switch tabs · e edit · Esc close",
+                "↑↓ navigate · Enter load · → preview · ← list · Ctrl+←/→ switch tabs · e edit · Esc close",
                 id="log-footer",
             )
 
@@ -172,14 +161,14 @@ class LogBrowserScreen(ModalScreen[Path | None]):
             "weeks": self.workspace.weeks_dir,
         }
         for tab, directory in dirs.items():
-            lv = self.query_one(f"#tab-{tab}", ListView)
+            list_view = self.query_one(f"#tab-{tab}", ListView)
             files = sorted(directory.glob("*.md"), reverse=True) if directory.exists() else []
             self._files[tab] = files
             if not files:
-                lv.append(ListItem(Label("No entries yet.")))
+                list_view.append(ListItem(Label("No entries yet.")))
             else:
                 for path in files:
-                    lv.append(ListItem(Label(self._format_stem(path.stem))))
+                    list_view.append(ListItem(Label(self._format_stem(path.stem))))
 
     def _switch_tab(self, index: int) -> None:
         self.tab_index = index % len(self.TABS)
@@ -197,9 +186,7 @@ class LogBrowserScreen(ModalScreen[Path | None]):
         self.query_one("#log-list-pane", Vertical).set_class(not in_preview, "active-pane")
         self.query_one("#log-preview-pane", Vertical).set_class(in_preview, "active-pane")
         tab = self.TABS[self.tab_index]
-        self.query_one("#log-tab-status", Label).update(
-            f"{tab.capitalize()}  ({self.tab_index + 1}/{len(self.TABS)})"
-        )
+        self.query_one("#log-tab-status", Label).update(f"{tab.capitalize()}  ({self.tab_index + 1}/{len(self.TABS)})")
         self.query_one("#log-preview-status", Label).update("Preview")
 
     async def _load_preview(self, path: Path) -> None:
@@ -273,13 +260,11 @@ class LogBrowserScreen(ModalScreen[Path | None]):
 
     def action_edit_selected(self) -> None:
         tab = self.TABS[self.tab_index]
-        lv = self.query_one(f"#tab-{tab}", ListView)
-        index = lv.index
+        list_view = self.query_one(f"#tab-{tab}", ListView)
+        index = list_view.index
         if index is None:
             return
         files = self._files[tab]
         if index >= len(files):
             return
         self.dismiss(files[index])
-
-

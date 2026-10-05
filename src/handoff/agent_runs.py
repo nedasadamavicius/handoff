@@ -1,18 +1,30 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import re
 
-from handoff.documents import merge_next_text
+from handoff.documents import first_occurrences, is_bullet, merge_next_text, strip_bullet_prefix
 from handoff.handoff import (
     HandoffDraft,
     draft_has_content,
     parse_draft_or_files,
     parse_last_sections,
 )
+from handoff.paths import unique_path
 from handoff.workspace import Workspace
+
+
+def unique_bullets(texts: list[str]) -> list[str]:
+    bullets: list[str] = []
+    for text in texts:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and stripped not in {"-", "- None", "None"}:
+                bullets.append(stripped if is_bullet(stripped) else f"- {stripped}")
+    meaningful = (bullet for bullet in bullets if strip_bullet_prefix(bullet))
+    return first_occurrences(meaningful, key=lambda bullet: strip_bullet_prefix(bullet).casefold())
 
 
 @dataclass
@@ -50,11 +62,7 @@ class RunLedger:
         directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
         stem = f"{stamp}-{self._safe_name(run.name)}"
-        path = directory / f"{stem}.md"
-        counter = 2
-        while path.exists():
-            path = directory / f"{stem}-{counter}.md"
-            counter += 1
+        path = unique_path(directory, stem)
         path.write_text(draft.read_text(encoding="utf-8"), encoding="utf-8")
         run.draft_snapshot = path
         self._pending.append(path)
@@ -67,23 +75,6 @@ class RunLedger:
         run.ended_at = datetime.now().astimezone()
         self.snapshot(run)
         return run
-
-    @staticmethod
-    def _unique_lines(texts: list[str], *, placeholder: str = "- ") -> list[str]:
-        result: list[str] = []
-        seen: set[str] = set()
-        for text in texts:
-            for line in text.splitlines():
-                value = line.strip()
-                if not value or value in {"-", "- None", "None"}:
-                    continue
-                if not value.startswith(("- ", "* ")):
-                    value = f"- {value}"
-                key = value[2:].strip().casefold()
-                if key and key not in seen:
-                    seen.add(key)
-                    result.append(value)
-        return result
 
     def merged_draft(self, next_text: str) -> HandoffDraft:
         drafts: list[HandoffDraft] = []
@@ -107,11 +98,13 @@ class RunLedger:
             issues.extend([opened])
             merged_next = merge_next_text(merged_next, draft.next)
         merged_next = merge_next_text(merged_next, next_text)
-        last = "\n\n".join([
-            "### Summary\n\n" + ("\n\n".join(summaries) or "Not recorded."),
-            "### Completed\n\n" + ("\n".join(self._unique_lines(completed)) or "- None"),
-            "### Open Issues\n\n" + ("\n".join(self._unique_lines(issues)) or "- None"),
-        ])
+        last = "\n\n".join(
+            [
+                "### Summary\n\n" + ("\n\n".join(summaries) or "Not recorded."),
+                "### Completed\n\n" + ("\n".join(unique_bullets(completed)) or "- None"),
+                "### Open Issues\n\n" + ("\n".join(unique_bullets(issues)) or "- None"),
+            ]
+        )
         return HandoffDraft(last=last, next=merged_next or "- None")
 
     def consume(self) -> None:

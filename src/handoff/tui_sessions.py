@@ -47,11 +47,12 @@ class SessionManagerWidget(Static):
     #session-controls Button { min-width: 8; width: auto; margin-right: 1; }
     """
 
-    def __init__(self, manager: SessionManager, config, workspace, ledger: RunLedger | None = None, **kwargs):
+    def __init__(self, manager: SessionManager, config, ledger: RunLedger | None = None, **kwargs):
         super().__init__("", **kwargs)
         self.manager, self.config = manager, config
         self._ledger = ledger
         self._pending = 0
+        self._timer = None
         self._polling = False
         self._shutdown = False
         self._rows = {}
@@ -66,8 +67,10 @@ class SessionManagerWidget(Static):
             "On Windows, Grok opens in its own console so its keyboard reaches that console directly. "
             "Open switches this terminal to a multiplexer window, or brings a Grok console forward. "
             "Quitting leaves sessions running; tracking is not restored after restart.\n"
-            + tools + "\nClick: Select | Enter or Double-click: Open | Ctrl+K: Stop | Ctrl+T: Workspace",
-            id="session-help", markup=False,
+            + tools
+            + "\nClick: Select | Enter or Double-click: Open | Ctrl+K: Stop | Ctrl+T: Workspace",
+            id="session-help",
+            markup=False,
         )
         yield Label("No sessions yet. Press a tool number to launch.", id="session-status", markup=False)
         yield SessionTable(id="sessions-table", cursor_type="row")
@@ -131,7 +134,9 @@ class SessionManagerWidget(Static):
                     if action == "launch" and result is not None and result.backend == "console":
                         message = "Grok opened in its own console. Open focuses that window."
                     elif action == "launch" and result is not None and result.mux_session:
-                        message = f"Agent window created in session {result.mux_session}. Open switches this terminal to it."
+                        message = (
+                            f"Agent window created in session {result.mux_session}. Open switches this terminal to it."
+                        )
                     else:
                         message = f"{action.capitalize()} completed."
                     self.query_one("#session-status", Label).update(message)
@@ -146,8 +151,12 @@ class SessionManagerWidget(Static):
     def _render_table(self) -> None:
         table = self.query_one(DataTable)
         rows = {
-            session.ident: (session.label, session.state, str(session.pid or ""),
-                            str(session.exit_code if session.exit_code is not None else session.error or ""))
+            session.ident: (
+                session.label,
+                session.state,
+                str(session.pid or ""),
+                str(session.exit_code if session.exit_code is not None else session.error or ""),
+            )
             for session in self.manager.sessions
         }
         if rows == self._rows:

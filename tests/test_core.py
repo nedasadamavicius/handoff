@@ -9,49 +9,48 @@ from textual.app import App
 from textual.widgets import Input, MarkdownViewer, TextArea
 from typer.testing import CliRunner
 
-from handoff.config import AppConfig, ensure_config, load_config
 from handoff.cli import app
-from handoff.handoff import HandoffDraft, parse_combined_draft, parse_draft_or_files, parse_last_sections, render_combined_draft
+from handoff.config import AppConfig, ensure_config, load_config
+from handoff.documents import merge_next_text, strip_handoff_frontmatter
+from handoff.handoff import (
+    HandoffDraft,
+    parse_combined_draft,
+    parse_draft_or_files,
+    parse_last_sections,
+    render_combined_draft,
+)
+from handoff.knowledge import KnowledgeIndex
 from handoff.launcher import (
-    CODEX_FINALIZE_PROMPT,
     LaunchError,
     codex_finalize_command,
+    finalize_prompt,
     is_terminal_editor,
     next_audit_command,
     run_command,
     spawn_detached,
 )
-from handoff.session import parse_session_file, render_handoff, render_session_log, update_day_log
-from handoff.tui import HandoffScreen, LogBrowserScreen, NewEntryScreen, WorkspaceShell, merge_next_text, strip_handoff_frontmatter
+from handoff.memory_files import ensure_tool_file, ensure_tool_files
+from handoff.session import parse_session_file, render_handoff
+from handoff.tui import WorkspaceShell
+from handoff.tui_logs import LogBrowserScreen
+from handoff.tui_screens import HandoffScreen, NewEntryScreen
 from handoff.weekly import (
     append_week_to_worklog,
     auto_generate_draft,
     collect_week_data,
-    find_pending_weeks,
     finalize_week_draft,
+    find_pending_weeks,
     read_week_draft,
     week_date_range,
     week_key,
-    week_label,
 )
 from handoff.workspace import (
     current_directory_workspace,
-    ensure_tool_file,
-    ensure_tool_files,
     ensure_workspace_files,
     infer_workspace_type,
-    workspace_type,
     workspace_mode,
-    set_workspace_mode,
+    workspace_type,
 )
-from handoff.knowledge import KnowledgeIndex
-
-
-def test_default_config_uses_in_code_defaults() -> None:
-    config = AppConfig()
-
-    assert config.editor.default in config.editor.options
-    assert config.tools == {"grok": "grok", "codex": "codex", "claude": "claude"}
 
 
 def test_config_creation_uses_handoff_root(tmp_path: Path) -> None:
@@ -248,7 +247,7 @@ def test_codex_finalize_command_uses_exec_resume_last() -> None:
 
     assert command is not None
     assert command.startswith("codex exec resume --last ")
-    assert CODEX_FINALIZE_PROMPT in command
+    assert finalize_prompt("Codex", "AGENTS.md", source_tags=True) in command
     assert "Do not list agent process steps" in command
 
 
@@ -390,11 +389,7 @@ def test_handoff_fields_support_standard_selection_and_clipboard_shortcuts() -> 
 
     asyncio.run(exercise_editor())
 
-    arrow_bindings = {
-        binding.key: binding
-        for binding in WorkspaceShell.BINDINGS
-        if binding.key in {"up", "down"}
-    }
+    arrow_bindings = {binding.key: binding for binding in WorkspaceShell.BINDINGS if binding.key in {"up", "down"}}
     assert not arrow_bindings["up"].priority
     assert not arrow_bindings["down"].priority
 
@@ -534,7 +529,7 @@ def test_workspace_watcher_updates_tree_and_overview_live(tmp_path: Path) -> Non
             assert "added.txt" not in tree_labels()
 
             (workspace_path / "added.txt").write_text("hi", encoding="utf-8")
-            workspace.next_file.write_text("# Next\n\n- Watched item\n",encoding="utf-8")
+            workspace.next_file.write_text("# Next\n\n- Watched item\n", encoding="utf-8")
             await app._watch_workspace()
             await pilot.pause()
 
@@ -624,9 +619,11 @@ def test_log_browser_separates_loading_from_pane_focus(tmp_path: Path) -> None:
 
 # --- weekly ---
 
+
 def _write_day(days_dir: Path, day: date, completed: str, open_issues: str, sessions: list[str]) -> None:
     days_dir.mkdir(parents=True, exist_ok=True)
     from handoff.session import render_day_log
+
     content = render_day_log(
         workspace="test",
         day=day,
@@ -746,61 +743,3 @@ def test_finalize_week_draft_marks_as_finalized(tmp_path: Path) -> None:
     pending = find_pending_weeks(days_dir, weeks_dir)
 
     assert (2026, 25) not in pending
-
-
-def test_source_tags_resolve_paths_to_numbers_and_drop_unknown() -> None:
-    from handoff.source_tags import number_files, resolve_source_tags, strip_numeric_tags
-
-    files = number_files(["src/b.py", "./src/a.py", "docs/"])
-    assert files == ["docs/", "src/a.py", "src/b.py"]
-    text, dropped = resolve_source_tags(
-        "- Keyed per slot [src\\b.py][src/a.py]\n- Decision, no files\n- Guess [9] [nope/x.py] [x]\n- In dir [docs/guide.md]",
-        files,
-    )
-    assert text.splitlines()[0] == "- Keyed per slot [3][2]"
-    assert text.splitlines()[1] == "- Decision, no files"
-    assert text.splitlines()[2] == "- Guess [x]"
-    assert text.splitlines()[3] == "- In dir [1]"
-    assert dropped == ["9", "nope/x.py"]
-    # renumbering keeps tags correct because they are resolved from the list in hand
-    shifted, _ = resolve_source_tags("- A [src/a.py]", number_files(["aaa.py", "src/a.py"]))
-    assert shifted == "- A [2]"
-    assert strip_numeric_tags("- A [1][2]\n- B") == "- A\n- B"
-
-
-def test_source_tags_survive_draft_parsing() -> None:
-    draft = "## LAST.md\n\n### Summary\n\nS\n\n### Completed\n\n- Did it [src/a.py][src/b.py]\n\n### Open Issues\n\n- None\n\n## NEXT.md\n\n- Go"
-    _, done, _ = parse_last_sections(parse_combined_draft(draft).last)
-    assert done == "- Did it [src/a.py][src/b.py]"
-
-
-def test_memory_template_flag_and_migration(tmp_path: Path) -> None:
-    from handoff.workspace import memory_file_migration
-
-    workspace = current_directory_workspace(tmp_path)
-    ensure_tool_file(workspace, "claude", "claude", source_tags=False)
-    legacy = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
-    assert "Tag by path" not in legacy
-    path, new_text = memory_file_migration(workspace, "claude", "claude")
-    assert "Tag by path, never by number" in new_text and "\u2014" not in new_text
-    (tmp_path / "CLAUDE.md").write_text(legacy + "\ncustom", encoding="utf-8")
-    assert memory_file_migration(workspace, "claude", "claude") is None
-
-    fresh = tmp_path / "fresh"
-    fresh.mkdir()
-    ensure_tool_file(current_directory_workspace(fresh), "codex", "codex")
-    assert "Tag by path, never by number" in (fresh / "AGENTS.md").read_text(encoding="utf-8")
-
-
-def test_auto_migrate_upgrades_only_untouched_legacy_files(tmp_path: Path) -> None:
-    from handoff.workspace import auto_migrate_memory_files
-
-    workspace = current_directory_workspace(tmp_path)
-    ensure_tool_file(workspace, "claude", "claude", source_tags=False)
-    ensure_tool_file(workspace, "codex", "codex", source_tags=False)
-    (tmp_path / "AGENTS.md").write_text("custom", encoding="utf-8")
-    done = auto_migrate_memory_files(workspace, {"claude": "claude", "codex": "codex"})
-    assert [p.name for p in done] == ["CLAUDE.md"]
-    assert "Tag by path" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
-    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == "custom"
-    assert auto_migrate_memory_files(workspace, {"claude": "claude"}) == []

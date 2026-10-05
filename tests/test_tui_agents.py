@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from textual.widgets import Button, ContentSwitcher, DataTable, DirectoryTree, Label
+from textual.widgets import ContentSwitcher, DataTable, DirectoryTree, Label
 
 from handoff.config import AppConfig
 from handoff.tui import WorkspaceShell
@@ -38,8 +38,15 @@ class FakeManager:
         if self.fail_launch:
             raise RuntimeError("missing executable")
         self.number += 1
-        session = SimpleNamespace(name=name, ident=str(self.number), label=f"{name} #{self.number}",
-                                  state="running", pid=self.number, exit_code=None, error=None)
+        session = SimpleNamespace(
+            name=name,
+            ident=str(self.number),
+            label=f"{name} #{self.number}",
+            state="running",
+            pid=self.number,
+            exit_code=None,
+            error=None,
+        )
         self.sessions.append(session)
         self.calls.append(("launch", session.ident))
         return session
@@ -65,7 +72,10 @@ class FakeManager:
 def make_app(tmp_path):
     path = tmp_path / "workspace"
     path.mkdir()
-    app = WorkspaceShell(AppConfig(root=tmp_path / "config", tools={"codex": "codex", "claude": "claude"}), current_directory_workspace(path))
+    app = WorkspaceShell(
+        AppConfig(root=tmp_path / "config", tools={"codex": "codex", "claude": "claude"}),
+        current_directory_workspace(path),
+    )
     app.session_manager = FakeManager()
     return app
 

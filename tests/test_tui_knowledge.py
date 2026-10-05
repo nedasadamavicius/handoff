@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 from textual.app import App
 
-from handoff.tui_screens import KnowledgeScreen, GraphView
+from handoff.tui_screens import GraphView, KnowledgeScreen
 
 
 def test_preview_empty_on_open(tmp_path: Path) -> None:
@@ -223,7 +222,7 @@ def test_dragging_empty_space_pans_the_graph(tmp_path: Path) -> None:
             await pilot.pause()
             graph = screen.query_one("#knowledge-graph", GraphView)
             graph.render()
-            taken = {(x + i, y) for p, (x, y) in graph.node_positions.items() for i in range(graph._node_width(p))}
+            taken = {(x + i, y) for p, (x, y) in graph.node_positions.items() for i in range(graph.node_width(p))}
             width, height = graph.content_region.width, graph.content_region.height
             empty = next((x, y) for y in range(height - 1, -1, -1) for x in range(width) if (x, y) not in taken)
             ox, oy = graph.content_region.x - graph.region.x, graph.content_region.y - graph.region.y
@@ -278,7 +277,7 @@ def test_graph_starts_fitted_so_every_node_is_visible(tmp_path: Path) -> None:
             graph = screen.query_one("#knowledge-graph", GraphView)
             graph.render()
             for path, (x, y) in graph.node_positions.items():
-                assert 0 <= x and x + graph._node_width(path) <= graph.size.width, path
+                assert 0 <= x and x + graph.node_width(path) <= graph.size.width, path
                 assert 0 <= y < graph.size.height, path
 
     asyncio.run(scenario())
