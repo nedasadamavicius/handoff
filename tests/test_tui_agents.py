@@ -283,7 +283,7 @@ def test_audit_next_button_runs_sonnet_job_and_backs_up(tmp_path):
     calls = []
 
     async def scenario():
-        with patch("handoff.tui.run_command", lambda command, cwd: calls.append((command, cwd)) or 0):
+        with patch("handoff.tui.run_quiet", lambda command, cwd, on_line: calls.append((command, cwd)) or (0, "")):
             async with app.run_test(size=(115, 36)) as pilot:
                 await pilot.click("#next-audit")
                 await until(pilot, lambda: bool(calls) and not app._next_audit_running)

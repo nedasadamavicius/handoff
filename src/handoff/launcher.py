@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from handoff.config import AppConfig
@@ -83,6 +85,9 @@ def next_audit_command(config: AppConfig) -> list[str]:
         NEXT_AUDIT_PROMPT,
         "--model",
         "sonnet",
+        "--output-format",
+        "stream-json",
+        "--verbose",
         "--allowedTools",
         NEXT_AUDIT_ALLOWED_TOOLS,
     ]
@@ -185,6 +190,58 @@ def claude_finalize_command(tool_name: str, command: str, source_tags: bool = Tr
     return subprocess.list2cmdline(
         [executable, "--continue", "-p", prompt, "--allowedTools", "Write(.handoff/*),Edit(.handoff/*)"]
     )
+
+
+def audit_phase(line: str) -> str | None:
+    """Name the audit phase a stream-json event belongs to, or None if it is not a tool call."""
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "assistant":
+        return None
+    content = (event.get("message") or {}).get("content")
+    for block in content if isinstance(content, list) else []:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            if block.get("name") in {"Edit", "Write"}:
+                return "rewriting"
+            if block.get("name") == "Bash":
+                return "checking git"
+            return "reading"
+    return None
+
+
+def run_quiet(command: list[str], cwd: Path, on_line: Callable[[str], None]) -> tuple[int, str]:
+    """Run a command without touching the terminal, feeding each output line to ``on_line``.
+
+    Returns the exit code and the last few output lines, for error reporting.
+    """
+    executable = shutil.which(command[0])
+    resolved = [executable, *command[1:]] if executable is not None else command
+    kwargs: dict[str, object] = {}
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        process = subprocess.Popen(
+            resolved,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **kwargs,
+        )
+    except FileNotFoundError as exc:
+        raise LaunchError(f"Could not find executable: {command[0]}") from exc
+    tail: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        on_line(line)
+        if not line.lstrip().startswith("{"):
+            tail = [*tail, line.strip()][-5:]
+    return process.wait(), "\n".join(tail)
 
 
 def run_command(command: list[str] | str, cwd: Path, *, shell: bool = False) -> int:

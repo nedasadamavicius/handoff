@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -31,10 +32,12 @@ from handoff.external_sessions import SessionManager
 from handoff.git import head_commit
 from handoff.launcher import (
     LaunchError,
+    audit_phase,
     editor_command,
     is_terminal_editor,
     next_audit_command,
     run_command,
+    run_quiet,
     spawn_detached,
 )
 from handoff.memory_files import ensure_tool_file
@@ -630,21 +633,42 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
             self.notify(str(exc), severity="error")
             return
         self._next_audit_running = True
-        self.notify("Auditing Next with Sonnet...", timeout=6)
+        self._audit_started = time.monotonic()
+        self._audit_phase = "starting"
+        self._audit_steps = 0
+        self._audit_timer = self.set_interval(1, self._render_audit_progress)
+        self._render_audit_progress()
         self.run_worker(self._run_next_audit(command), exclusive=False)
+
+    def _render_audit_progress(self) -> None:
+        elapsed = int(time.monotonic() - self._audit_started)
+        label = f"Auditing: {self._audit_phase} - {self._audit_steps} steps - {elapsed // 60}:{elapsed % 60:02d}"
+        self.query_one("#next-audit", Button).label = label
+
+    def _on_audit_line(self, line: str) -> None:
+        phase = audit_phase(line)
+        if phase is not None:
+            self._audit_steps += 1
+            self._audit_phase = phase
+
+    def _finish_audit(self) -> None:
+        self._next_audit_running = False
+        self._audit_timer.stop()
+        self.query_one("#next-audit", Button).label = "Audit"
 
     async def _run_next_audit(self, command: list[str]) -> None:
         backup = self.workspace.meta / "NEXT.bak.md"
         try:
             backup.write_text(self.workspace.next_file.read_text(encoding="utf-8"), encoding="utf-8")
-            code = await asyncio.to_thread(run_command, command, self.workspace.path)
+            code, tail = await asyncio.to_thread(run_quiet, command, self.workspace.path, self._on_audit_line)
         except Exception as exc:  # noqa: BLE001 - surface any launch failure to the user
-            self._next_audit_running = False
+            self._finish_audit()
             self.notify(f"Next audit failed: {exc}", severity="error")
             return
-        self._next_audit_running = False
+        self._finish_audit()
         if code != 0:
-            self.notify(f"Next audit exited with code {code}. Backup at {backup.name}.", severity="error")
+            detail = f" {tail}" if tail else ""
+            self.notify(f"Next audit exited with code {code}. Backup at {backup.name}.{detail}", severity="error")
             return
         self.show_workspace_overview()
         self.notify(f"Next audited by Sonnet. Backup saved to {backup.name}.", timeout=8)

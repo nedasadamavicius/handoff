@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from handoff.handoff import (
 from handoff.knowledge import KnowledgeIndex
 from handoff.launcher import (
     LaunchError,
+    audit_phase,
     codex_finalize_command,
     finalize_prompt,
     format_command,
@@ -754,3 +756,14 @@ def test_finalize_week_draft_marks_as_finalized(tmp_path: Path) -> None:
     pending = find_pending_weeks(days_dir, weeks_dir)
 
     assert (2026, 25) not in pending
+
+
+def test_audit_phase_names_tool_calls_and_ignores_other_lines() -> None:
+    def call(name: str) -> str:
+        return json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name}]}})
+
+    assert audit_phase(call("Read")) == "reading"
+    assert audit_phase(call("Bash")) == "checking git"
+    assert audit_phase(call("Edit")) == "rewriting"
+    assert audit_phase(json.dumps({"type": "system"})) is None
+    assert audit_phase("not json") is None
