@@ -110,8 +110,8 @@ def ensure_workspace_files(
 
 def render_workspace_file(workspace: Workspace, kind: str, mode: str | None = None) -> str:
     description = (
-        "Code repository workspace. Handoff templates may include development evidence such as tools launched, "
-        "files opened, and git status."
+        "Code repository workspace. Handoff templates may include development evidence such as files "
+        "opened and git status."
         if kind == "code"
         else "Regular workspace for notes, learning, content, or general files."
     )

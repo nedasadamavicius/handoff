@@ -140,7 +140,6 @@ class HandoffFlowMixin:
 
     def action_handoff(self) -> None:
         workspace = self.workspace
-        tools = [*self.tools_launched, *self.run_ledger.tools_launched]
         kind = workspace_type(workspace) or "regular"
         git_status = git_status_short(workspace.path) if kind == "code" else ""
         committed = (
@@ -154,7 +153,6 @@ class HandoffFlowMixin:
             files_block = chr(10).join(f"- {item}" for item in changed_files) or "- None detected"
         evidence = (
             f"Files changed:\n{files_block}\n\n"
-            f"Tools launched:\n{chr(10).join(f'- {item}' for item in tools) or '- None tracked'}\n\n"
             f"Git status:\n{git_status or 'No changes detected.'}"
             if kind == "code"
             else ""
