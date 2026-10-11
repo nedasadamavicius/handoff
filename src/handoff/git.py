@@ -21,7 +21,7 @@ def _run_git(path: Path, *args: str) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    return result.stdout.strip()
+    return result.stdout.rstrip()
 
 
 def git_status_short(path: Path) -> str:
@@ -81,7 +81,7 @@ def origin_url(repo: Path) -> str:
         )
     except FileNotFoundError:
         return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
+    return result.stdout.rstrip() if result.returncode == 0 else ""
 
 
 def repository_id(repo: Path) -> str:
