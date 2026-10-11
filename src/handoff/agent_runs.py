@@ -80,12 +80,15 @@ class RunLedger:
         drafts: list[HandoffDraft] = []
         for path in self._pending:
             if path.exists():
-                drafts.append(parse_draft_or_files(path.read_text(encoding="utf-8")))
+                text = path.read_text(encoding="utf-8")
+                if draft_has_content(text):
+                    drafts.append(parse_draft_or_files(text))
         current = self.workspace.draft_file.read_text(encoding="utf-8") if self.workspace.draft_file.exists() else ""
         current_next = self.workspace.next_file.read_text(encoding="utf-8") if self.workspace.next_file.exists() else ""
         if not drafts and not current.strip():
             return HandoffDraft(last="", next=merge_next_text(current_next, next_text))
-        drafts.append(parse_draft_or_files(current, current_next))
+        if draft_has_content(current) or not drafts:
+            drafts.append(parse_draft_or_files(current, current_next))
         summaries: list[str] = []
         completed: list[str] = []
         issues: list[str] = []
