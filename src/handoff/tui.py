@@ -203,6 +203,13 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         content-align: left middle;
     }
 
+    #next-status {
+        width: auto;
+        height: 1;
+        display: none;
+        color: $warning;
+    }
+
     #next-audit {
         width: auto;
         min-width: 9;
@@ -336,6 +343,7 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
                         with Vertical(id="next-container"):
                             with Horizontal(id="next-header"):
                                 yield Label("What's Next", id="next-title")
+                                yield Label("", id="next-status")
                                 yield Button("Audit", id="next-audit")
                             with VerticalScroll(id="next-scroll"):
                                 yield Markdown("", id="next-panel")
@@ -643,7 +651,9 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
     def _render_audit_progress(self) -> None:
         elapsed = int(time.monotonic() - self._audit_started)
         label = f"Auditing: {self._audit_phase} - {self._audit_steps} steps - {elapsed // 60}:{elapsed % 60:02d}"
-        self.query_one("#next-audit", Button).label = label
+        status = self.query_one("#next-status", Label)
+        status.update(label)
+        status.display = True
 
     def _on_audit_line(self, line: str) -> None:
         phase = audit_phase(line)
@@ -654,7 +664,7 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
     def _finish_audit(self) -> None:
         self._next_audit_running = False
         self._audit_timer.stop()
-        self.query_one("#next-audit", Button).label = "Audit"
+        self.query_one("#next-status", Label).display = False
 
     async def _run_next_audit(self, command: list[str]) -> None:
         backup = self.workspace.meta / "NEXT.bak.md"
