@@ -117,3 +117,14 @@ def test_merge_skips_empty_scaffold_snapshots(tmp_path: Path) -> None:
     assert merged.last.count("### Summary") == 1
     assert "Real summary" in merged.last.split("### Completed")[0]
     assert "- Done" in merged.last
+
+
+def test_merge_never_leaves_an_empty_bullet_in_next(tmp_path: Path) -> None:
+    ws = workspace(tmp_path)
+    ws.draft_file.write_text(draft("A", "- Done", "- None", "- "), encoding="utf-8")
+    ws.next_file.write_text("# Next\n\n- Real item\n", encoding="utf-8")
+    ledger = RunLedger(ws)
+    ledger.snapshot(ledger.begin("a", "cmd"))
+    merged = ledger.merged_draft("# Next\n\n- Real item\n")
+    assert merged.next.splitlines()[0] == "- Real item"
+    assert all(line.strip() not in {"-", "*"} for line in merged.next.splitlines())

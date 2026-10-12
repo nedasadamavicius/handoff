@@ -153,6 +153,8 @@ def deduplicate_next_lines(text: str) -> str:
             if kept_lines and kept_lines[-1] != "":
                 kept_lines.append("")
             continue
+        if normalized in {"-", "*"}:
+            continue
         if normalized.lower() in seen_lines:
             continue
         seen_lines.add(normalized.lower())
