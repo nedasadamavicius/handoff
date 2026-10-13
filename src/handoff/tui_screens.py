@@ -185,6 +185,47 @@ class HandoffScreen(PagedTextScreen):
         )
 
 
+class ConfirmScreen(DialogScreen[bool]):
+    """Yes/no prompt. Enter and Del confirm; Esc cancels."""
+
+    CSS = """
+    #confirm-dialog { width: 60; height: auto; }
+    #confirm-message { height: auto; padding-bottom: 1; }
+    #confirm-buttons { height: auto; align-horizontal: right; }
+    .confirm-button { width: 10; }
+    """
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("y,delete", "confirm", "Confirm", show=False, priority=True),
+    ]
+
+    def __init__(self, title: str, message: str, confirm_label: str = "Delete") -> None:
+        super().__init__()
+        self.title_text = title
+        self.message = message
+        self.confirm_label = confirm_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-dialog", classes="dialog"):
+            yield Label(self.title_text, id="confirm-title", classes="dialog-title")
+            yield Label(self.message, id="confirm-message")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Cancel", id="cancel", classes="confirm-button")
+                yield Button(self.confirm_label, id="confirm", variant="error", classes="confirm-button")
+
+    def on_mount(self) -> None:
+        self.query_one("#cancel", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+
 class NewEntryScreen(DialogScreen[str | None]):
     CSS = """
     #new-entry-dialog {

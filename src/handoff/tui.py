@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from handoff.tui_footer import ResponsiveFooter
 from handoff.tui_handoff_flow import HandoffFlowMixin
 from handoff.tui_navigation import PaneNavigationMixin
 from handoff.tui_screens import (
+    ConfirmScreen,
     EntryKind,
     NewEntryScreen,
     WorkspaceModeScreen,
@@ -315,6 +317,7 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         Binding("enter", "select_focused", "Select", show=False),
         Binding("c", "new_file", "New File"),
         Binding("d", "new_folder", "New Folder"),
+        Binding("delete", "delete_entry", "Delete"),
     ]
 
     def __init__(self, config: AppConfig, workspace: Workspace) -> None:
@@ -559,16 +562,21 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         tree.reload()
         self.show_workspace_overview()
 
-    def _get_cursor_directory(self) -> Path:
+    def _cursor_path(self) -> Path | None:
         tree = self.query_one("#file-tree", WorkspaceDirectoryTree)
         node = tree.cursor_node
-        if node is not None and node.data is not None:
-            try:
-                node_path = Path(node.data.path)
-                return node_path if node_path.is_dir() else node_path.parent
-            except (AttributeError, TypeError):
-                pass
-        return self.workspace.path
+        if node is None or node.data is None:
+            return None
+        try:
+            return Path(node.data.path)
+        except (AttributeError, TypeError):
+            return None
+
+    def _get_cursor_directory(self) -> Path:
+        path = self._cursor_path()
+        if path is None:
+            return self.workspace.path
+        return path if path.is_dir() else path.parent
 
     def action_new_file(self) -> None:
         self._show_new_entry_dialog("file")
@@ -606,10 +614,74 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         self.push_screen(NewEntryScreen(target_dir, entry_kind), on_result)
 
     def action_edit(self) -> None:
-        if self.active_file is None:
-            self.notify("Select a file first.", severity="warning")
+        """Open the highlighted tree path, or the previewed file, in the configured editor.
+
+        A highlighted directory, including the workspace root, opens as a folder
+        (``code <folder>`` for VS Code) instead of the last opened file.
+        """
+        if self.focus_area == "files":
+            path = self._cursor_path() or self.workspace.path
+        else:
+            path = self.active_file or self.workspace.path
+        if not path.exists():
+            self.notify("Nothing to open.", severity="warning")
             return
-        self.edit_path(self.active_file)
+        if path.is_file():
+            self.active_file = path
+        self.edit_path(path)
+
+    def action_delete_entry(self) -> None:
+        if len(self.screen_stack) > 1 or self.focus_area != "files":
+            return
+        path = self._cursor_path()
+        if path is None or not path.exists():
+            self.notify("Select a file or folder to delete.", severity="warning")
+            return
+        root = self.workspace.path.resolve()
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except ValueError:
+            self.notify("That path is outside the workspace.", severity="error")
+            return
+        if resolved == root:
+            self.notify("The workspace itself cannot be deleted.", severity="warning")
+            return
+
+        folder = path.is_dir() and not path.is_symlink()
+        message = (
+            "This folder and everything inside it will be removed."
+            if folder
+            else "This cannot be undone."
+        )
+
+        def on_result(confirmed: bool | None) -> None:
+            if not confirmed or not path.exists():
+                return
+            try:
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            except OSError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            removed_preview = False
+            if self.active_file is not None:
+                try:
+                    self.active_file.resolve().relative_to(resolved)
+                except ValueError:
+                    removed_preview = False
+                else:
+                    removed_preview = True
+                    self.active_file = None
+                    self.preview_mode = False
+            self.query_one("#file-tree", DirectoryTree).reload()
+            if removed_preview:
+                self.show_workspace_overview()
+            self.notify(f"Deleted {path.name}.")
+
+        self.push_screen(ConfirmScreen(f"Delete {path.name}?", message), on_result)
 
     def edit_path(self, path: Path) -> None:
         command = editor_command(self.config, path)

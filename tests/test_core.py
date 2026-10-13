@@ -37,9 +37,9 @@ from handoff.launcher import (
 )
 from handoff.memory_files import ensure_tool_file, ensure_tool_files
 from handoff.session import parse_session_file, render_handoff
-from handoff.tui import WorkspaceShell
+from handoff.tui import WorkspaceDirectoryTree, WorkspaceShell
 from handoff.tui_logs import LogBrowserScreen
-from handoff.tui_screens import HandoffScreen, NewEntryScreen
+from handoff.tui_screens import ConfirmScreen, HandoffScreen, NewEntryScreen
 from handoff.weekly import (
     append_week_to_worklog,
     auto_generate_draft,
@@ -495,6 +495,130 @@ def test_clicking_a_pane_moves_focus_to_it(tmp_path: Path) -> None:
             assert app.focused is tree
 
     asyncio.run(exercise_clicks())
+
+
+def _select_tree_path(app: WorkspaceShell, path: Path) -> None:
+    tree = app.query_one("#file-tree", WorkspaceDirectoryTree)
+    pending = [tree.root]
+    while pending:
+        node = pending.pop()
+        if node.data is not None and Path(node.data.path) == path:
+            tree.move_cursor(node)
+            return
+        pending.extend(node.children)
+    raise AssertionError(f"{path} is not in the file tree")
+
+
+def test_edit_on_workspace_root_opens_the_folder(tmp_path: Path, monkeypatch) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    note = workspace_path / "note.py"
+    note.write_text("print('hi')\n", encoding="utf-8")
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+    opened: list[Path] = []
+
+    monkeypatch.setattr("handoff.tui.spawn_detached", lambda command, cwd: opened.append(Path(command[-1])))
+    monkeypatch.setattr("handoff.tui.editor_command", lambda config, path: ["code", str(path)])
+
+    async def exercise_open_root() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            _select_tree_path(app, note)
+            await pilot.press("e")
+            await pilot.pause()
+            assert opened == [note]
+
+            _select_tree_path(app, workspace_path)
+            await pilot.press("e")
+            await pilot.pause()
+            assert opened[-1] == workspace_path
+
+    asyncio.run(exercise_open_root())
+
+
+def test_delete_key_removes_the_selected_file(tmp_path: Path) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    note = workspace_path / "note.md"
+    note.write_text("# Note\n", encoding="utf-8")
+    kept = workspace_path / "keep.md"
+    kept.write_text("# Keep\n", encoding="utf-8")
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    async def exercise_delete() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            _select_tree_path(app, note)
+            await pilot.press("delete")
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+            assert note.exists()
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert note.exists()
+            assert not isinstance(app.screen, ConfirmScreen)
+
+            await pilot.press("delete")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+
+            assert not note.exists()
+            assert kept.exists()
+            assert "note.md" not in _tree_labels(app)
+
+    asyncio.run(exercise_delete())
+
+
+def test_delete_key_removes_a_folder_and_keeps_the_root(tmp_path: Path) -> None:
+    workspace_path = tmp_path / "workspace"
+    folder = workspace_path / "notes"
+    folder.mkdir(parents=True)
+    inner = folder / "a.md"
+    inner.write_text("a", encoding="utf-8")
+    kept = workspace_path / "keep.md"
+    kept.write_text("k", encoding="utf-8")
+    workspace = current_directory_workspace(workspace_path)
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    async def exercise_delete_folder() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            _select_tree_path(app, workspace_path)
+            await pilot.press("delete")
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmScreen)
+            assert workspace_path.exists()
+
+            app.active_file = inner
+            app.show_text_preview("a")
+            await pilot.pause()
+            _select_tree_path(app, folder)
+            await pilot.press("delete")
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("y")
+            await pilot.pause()
+
+            assert not folder.exists()
+            assert kept.exists()
+            assert app.active_file is None
+            assert app.query_one("#right-switcher").current == "overview-view"
+
+    asyncio.run(exercise_delete_folder())
+
+
+def _tree_labels(app: WorkspaceShell) -> set[str]:
+    tree = app.query_one("#file-tree")
+    labels, pending = set(), [tree.root]
+    while pending:
+        node = pending.pop()
+        labels.add(str(node.label))
+        pending.extend(node.children)
+    return labels
 
 
 def test_new_folder_action_creates_folder_in_workspace(tmp_path: Path) -> None:
