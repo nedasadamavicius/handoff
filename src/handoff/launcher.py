@@ -16,8 +16,17 @@ def split_command(command: str) -> list[str]:
 
     Windows keeps backslashes in paths, so it uses non-POSIX rules; elsewhere
     POSIX rules strip quotes so `-c "a b"` arrives as one unquoted argument.
+    Non-POSIX splitting keeps the quotes, so they are stripped afterwards.
     """
-    return shlex.split(command, posix=sys.platform != "win32")
+    if sys.platform != "win32":
+        return shlex.split(command)
+    return [_unquote(part) for part in shlex.split(command, posix=False)]
+
+
+def _unquote(part: str) -> str:
+    if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'":
+        return part[1:-1]
+    return part
 
 
 def executable_stem(value: str) -> str:

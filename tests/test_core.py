@@ -223,7 +223,6 @@ def test_run_command_resolves_windows_command_wrapper(tmp_path: Path, monkeypatc
     assert calls == [([wrapper, "--wait", "notes.md"], str(tmp_path), False)]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX quoting")
 def test_commands_split_quoted_arguments_and_keep_file_paths_whole() -> None:
     assert split_command('python -c "import time; time.sleep(1)"') == ["python", "-c", "import time; time.sleep(1)"]
     path = Path("/notes/it's a note.md")
