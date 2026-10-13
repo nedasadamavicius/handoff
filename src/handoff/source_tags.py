@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-_TAG = re.compile(r"([ 	]*)\[([^\[\]\s()]+)\](?!\()")
+_TAG = re.compile(r"([ 	]*)\[([^\[\]\s]+)\](?!\()")
 _TRAILING_NUMERIC = re.compile(r"(?:\[\d+\])+\s*$")
 
 
