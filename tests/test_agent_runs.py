@@ -106,19 +106,6 @@ def test_merge_skips_empty_scaffold_snapshots(tmp_path: Path) -> None:
     assert "- Done" in merged.last
 
 
-def test_merge_skips_empty_scaffold_snapshots(tmp_path: Path) -> None:
-    ws = workspace(tmp_path)
-    ws.draft_file.write_text(draft("", "- ", "- ", ""), encoding="utf-8")
-    ledger = RunLedger(ws)
-    ledger.snapshot(ledger.begin("a", "cmd"))
-    ws.draft_file.write_text(draft("Real summary", "- Done", "- None", "- Later"), encoding="utf-8")
-    ledger.snapshot(ledger.begin("b", "cmd"))
-    merged = ledger.merged_draft("")
-    assert merged.last.count("### Summary") == 1
-    assert "Real summary" in merged.last.split("### Completed")[0]
-    assert "- Done" in merged.last
-
-
 def test_merge_never_leaves_an_empty_bullet_in_next(tmp_path: Path) -> None:
     ws = workspace(tmp_path)
     ws.draft_file.write_text(draft("A", "- Done", "- None", "- "), encoding="utf-8")
