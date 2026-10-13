@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -13,7 +14,6 @@ from textual.widgets import (
     ContentSwitcher,
     DataTable,
     DirectoryTree,
-    Footer,
     Label,
     Markdown,
     MarkdownViewer,
@@ -43,6 +43,7 @@ from handoff.launcher import (
 from handoff.memory_files import ensure_tool_file
 from handoff.session import now_local
 from handoff.theme import ensure_themes_dir, register_all_themes
+from handoff.tui_footer import ResponsiveFooter
 from handoff.tui_handoff_flow import HandoffFlowMixin
 from handoff.tui_navigation import PaneNavigationMixin
 from handoff.tui_screens import (
@@ -75,6 +76,15 @@ HIDDEN_TREE_NAMES = {
 }
 HIDDEN_TREE_SUFFIXES = {".pyc", ".pyo"}
 WATCH_INTERVAL = 1.0
+# The file tree is only for picking files; on narrow terminals it gives up width
+# before the Last/Next panels, which hold the content.
+BROWSER_MAX_WIDTH = 40
+BROWSER_MIN_WIDTH = 20
+OVERVIEW_MIN_WIDTH = 100
+
+
+def browser_width(total: int) -> int:
+    return max(BROWSER_MIN_WIDTH, min(BROWSER_MAX_WIDTH, total - OVERVIEW_MIN_WIDTH))
 
 
 def is_tree_visible(name: str) -> bool:
@@ -329,6 +339,12 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         self._watch_busy = False
         self._watch_state: tuple | None = None
 
+    def fit_browser(self, total: int | None = None) -> None:
+        self.query_one("#browser").styles.width = browser_width(total or self.size.width)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.fit_browser(event.size.width)
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="root"):
             with Vertical(id="browser"):
@@ -362,11 +378,12 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
                             self.session_manager, self.config, ledger=self.run_ledger
                         )
                         yield self.session_widget
-        yield Footer()
+        yield ResponsiveFooter()
 
     def on_mount(self) -> None:
         ensure_themes_dir(self.config.themes_dir)
         register_all_themes(self, self.config)
+        self.fit_browser()
         self.query_one("#file-tree", DirectoryTree).focus()
         # Clicks pick the pane via on_mouse_down; letting these widgets grab focus
         # first would bounce focus away from the tree and rebuild the footer twice.
