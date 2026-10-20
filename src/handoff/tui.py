@@ -246,6 +246,15 @@ class WorkspaceShell(PaneNavigationMixin, HandoffFlowMixin, App):
         height: 1fr;
     }
 
+    /* List markup drops blank lines, so previews insert the gap themselves. */
+    MarkdownBulletList > Horizontal {
+        margin-bottom: 1;
+    }
+
+    MarkdownBulletList > Horizontal:last-child {
+        margin-bottom: 0;
+    }
+
     #last-panel {
         width: 1fr;
         height: auto;

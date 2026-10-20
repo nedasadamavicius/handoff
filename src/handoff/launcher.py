@@ -53,6 +53,7 @@ def finalize_prompt(tool_label: str, memory_file: str, source_tags: bool) -> str
         f"Update .handoff/DRAFT.md from the work completed in this {tool_label} session.",
         f"Use the required handoff format from {memory_file}.",
         "Write normal human-readable Markdown, not patch or diff notation; never prefix bullets with '+-' or '--'.",
+        "Leave a blank line between bullets.",
         f"Complete LAST.md with {report_contents}.",
         "In Completed, include shipped changes, decisions, fixes, or artifacts created.",
         "Do not list agent process steps like reading, re-reading, inspecting, reviewing, searching, "
@@ -61,7 +62,7 @@ def finalize_prompt(tool_label: str, memory_file: str, source_tags: bool) -> str
         "Do not make unrelated code changes.",
     ]
     if source_tags:
-        sentences.insert(5, SOURCE_TAG_INSTRUCTION)
+        sentences.insert(6, SOURCE_TAG_INSTRUCTION)
     return " ".join(sentences)
 
 
@@ -70,7 +71,8 @@ NEXT_AUDIT_PROMPT = (
     "Read .handoff/NEXT.md, then use git history and diffs (git log, git diff, git show, git status) "
     "to judge which entries are obsolete: already shipped or committed, duplicated, or no longer relevant. "
     "Rewrite .handoff/NEXT.md keeping only durable, still-open next actions, in priority order. "
-    "Preserve the '# Next' heading and use '- ' bullets; write plain human-readable Markdown, not diff notation. "
+    "Preserve the '# Next' heading and use '- ' bullets with a blank line between them; "
+    "write plain human-readable Markdown, not diff notation. "
     "Remove duplicates, junk lines, and anything the git history shows is already done. "
     "Do not edit any file other than .handoff/NEXT.md, and make no code changes."
 )

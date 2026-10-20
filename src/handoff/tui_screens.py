@@ -10,6 +10,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widgets import Button, ContentSwitcher, Input, Label, Static, TextArea
 
+from handoff.documents import separate_bullets
 from handoff.knowledge import KnowledgeIndex
 from handoff.tui_forms import DialogScreen, EditableInput, EditableTextArea, PagedTextScreen
 from handoff.tui_graph import GraphView
@@ -94,9 +95,9 @@ class HandoffScreen(PagedTextScreen):
         super().__init__()
         self.workspace_name = workspace_name
         self.summary = summary
-        self.done = done
-        self.open_items = open_items
-        self.next_template = next_template
+        self.done = separate_bullets(done)
+        self.open_items = separate_bullets(open_items)
+        self.next_template = separate_bullets(next_template)
         self.evidence = evidence
 
     def compose(self) -> ComposeResult:
@@ -477,8 +478,8 @@ class WeeklyReviewScreen(PagedTextScreen):
         self.year = year
         self.week = week
         self.summary = summary
-        self.highlights = highlights
-        self.carry_forwards = carry_forwards
+        self.highlights = separate_bullets(highlights)
+        self.carry_forwards = separate_bullets(carry_forwards)
 
     def compose(self) -> ComposeResult:
         label = week_label(self.year, self.week)

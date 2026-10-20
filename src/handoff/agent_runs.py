@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from handoff.documents import first_occurrences, is_bullet, merge_next_text, strip_bullet_prefix
+from handoff.documents import first_occurrences, is_bullet, merge_next_text, separate_bullets, strip_bullet_prefix
 from handoff.handoff import (
     HandoffDraft,
     draft_has_content,
@@ -104,11 +104,11 @@ class RunLedger:
         last = "\n\n".join(
             [
                 "### Summary\n\n" + ("\n\n".join(summaries) or "Not recorded."),
-                "### Completed\n\n" + ("\n".join(unique_bullets(completed)) or "- None"),
-                "### Open Issues\n\n" + ("\n".join(unique_bullets(issues)) or "- None"),
+                "### Completed\n\n" + ("\n\n".join(unique_bullets(completed)) or "- None"),
+                "### Open Issues\n\n" + ("\n\n".join(unique_bullets(issues)) or "- None"),
             ]
         )
-        return HandoffDraft(last=last, next=merged_next or "- None")
+        return HandoffDraft(last=last, next=separate_bullets(merged_next) or "- None")
 
     def consume(self) -> None:
         self._pending.clear()

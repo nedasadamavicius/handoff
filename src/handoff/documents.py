@@ -38,9 +38,36 @@ def strip_bullet_prefix(line: str) -> str:
     return stripped[2:].strip() if is_bullet(stripped) else stripped
 
 
+def separate_bullets(text: str) -> str:
+    """Put one blank line between consecutive bullet lines.
+
+    A bullet that already has a blank line above it is left alone. A trailing
+    newline on the input is kept.
+    """
+    trailing_newline = text.endswith("\n")
+    spaced: list[str] = []
+    for line in text.splitlines():
+        if line.strip() and is_bullet(line) and _previous_bullet_is_tight(spaced):
+            spaced.append("")
+        spaced.append(line)
+    rendered = "\n".join(spaced)
+    if trailing_newline and rendered:
+        rendered += "\n"
+    return rendered
+
+
+def _previous_bullet_is_tight(lines: list[str]) -> bool:
+    """True when the last non-empty line is a bullet with no blank line under it."""
+    for line in reversed(lines):
+        if not line.strip():
+            return False
+        return is_bullet(line)
+    return False
+
+
 def render_bullets(items: Iterable[str], empty: str = "- None") -> str:
     bullets = [f"- {item}" for item in items]
-    return "\n".join(bullets) if bullets else empty
+    return "\n\n".join(bullets) if bullets else empty
 
 
 def first_occurrences(items: Iterable[str], key: Callable[[str], str] = str.casefold) -> list[str]:
@@ -134,7 +161,7 @@ def normalize_list_text(text: str) -> str:
         if not item:
             continue
         lines.append(item if item.startswith(("-", "*")) else f"- {item}")
-    return "\n".join(lines) or "- None"
+    return "\n\n".join(lines) or "- None"
 
 
 def strip_next_heading(markdown: str) -> str:

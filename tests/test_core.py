@@ -10,11 +10,12 @@ import pytest
 import yaml
 from textual.app import App
 from textual.widgets import Input, MarkdownViewer, TextArea
+from textual.widgets._markdown import MarkdownBulletList
 from typer.testing import CliRunner
 
 from handoff.cli import app
 from handoff.config import AppConfig, ensure_config, load_config
-from handoff.documents import merge_next_text, strip_handoff_frontmatter
+from handoff.documents import merge_next_text, normalize_list_text, render_bullets, separate_bullets, strip_handoff_frontmatter
 from handoff.handoff import (
     HandoffDraft,
     parse_combined_draft,
@@ -160,6 +161,7 @@ def test_codex_tool_creates_agents_memory_file(tmp_path: Path) -> None:
     assert "Do not list agent process steps" in text
     assert "running tests" in text
     assert "Do not spend time expanding the NEXT.md section" in text
+    assert "Leave a blank line between bullets." in text
 
 
 def test_codex_command_creates_agents_memory_file(tmp_path: Path) -> None:
@@ -339,6 +341,13 @@ def test_legacy_draft_prefill_normalizes_diff_markers() -> None:
     assert draft.next == "# Next\n\n- Verify handoff save from the TUI."
 
 
+def test_handoff_bullets_keep_a_blank_line_between_them() -> None:
+    assert render_bullets(["Shipped the fix", "Covered it"]) == "- Shipped the fix\n\n- Covered it"
+    assert normalize_list_text("- One\n- Two") == "- One\n\n- Two"
+    assert separate_bullets("- One\n\n- Two\n") == "- One\n\n- Two\n"
+    assert separate_bullets("# Next\n\n- One\n- Two") == "# Next\n\n- One\n\n- Two"
+
+
 def test_strip_handoff_frontmatter(tmp_path: Path) -> None:
     path = tmp_path / "LAST.md"
     path.write_text("---\nworkspace: test\n---\n\n# Last Session\n\nDone.\n", encoding="utf-8")
@@ -425,6 +434,39 @@ def test_ctrl_s_saves_open_handoff_instead_of_stacking_modal(tmp_path: Path) -> 
             assert workspace.last_file.exists()
 
     asyncio.run(exercise_handoff())
+
+
+def test_preview_leaves_a_row_between_tight_bullets(tmp_path: Path) -> None:
+    workspace = current_directory_workspace(tmp_path)
+    workspace.meta.mkdir(parents=True, exist_ok=True)
+    workspace.last_file.write_text(
+        "# Current Session Summary\n\n## Completed\n\n- One\n- Two\n",
+        encoding="utf-8",
+    )
+    note = tmp_path / "note.md"
+    note.write_text("# Note\n\n- Alpha\n- Beta\n", encoding="utf-8")
+    app = WorkspaceShell(AppConfig(root=tmp_path / "config"), workspace)
+
+    async def exercise_preview() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            overview_rows = list(app.query_one("#last-panel").query_one(MarkdownBulletList).children)
+            assert len(overview_rows) == 2
+            assert overview_rows[1].region.y >= overview_rows[0].region.y + 2
+
+            app.show_markdown_preview(note.read_text(encoding="utf-8"))
+            preview_rows = []
+            for _ in range(10):
+                await pilot.pause()
+                found = app.query_one("#preview").query(MarkdownBulletList)
+                if found:
+                    preview_rows = list(found.first().children)
+                    break
+            assert preview_rows
+            assert len(preview_rows) == 2
+            assert preview_rows[1].region.y >= preview_rows[0].region.y + 2
+
+    asyncio.run(exercise_preview())
 
 
 def test_edit_keeps_open_file_preview_instead_of_returning_home(tmp_path: Path, monkeypatch) -> None:

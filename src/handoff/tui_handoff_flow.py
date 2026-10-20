@@ -150,7 +150,7 @@ class HandoffFlowMixin:
             changed_files = number_files(changed_files)
             files_block = format_numbered(changed_files) or "- None detected"
         else:
-            files_block = chr(10).join(f"- {item}" for item in changed_files) or "- None detected"
+            files_block = "\n\n".join(f"- {item}" for item in changed_files) or "- None detected"
         evidence = (
             f"Files changed:\n{files_block}\n\n"
             f"Git status:\n{git_status or 'No changes detected.'}"

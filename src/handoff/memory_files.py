@@ -33,7 +33,7 @@ Do not spend time expanding the NEXT.md section during ordinary progress updates
 
 Before ending any session, make sure `.handoff/DRAFT.md` uses this exact format:
 
-Write normal human-readable Markdown. Do not write patch or diff notation in `.handoff/DRAFT.md`; bullets should start with `- `, never `+- ` or `-- `.
+Write normal human-readable Markdown. Do not write patch or diff notation in `.handoff/DRAFT.md`; bullets should start with `- `, never `+- ` or `-- `. Leave a blank line between bullets.
 
 ## LAST.md
 
@@ -83,7 +83,7 @@ Do not spend time expanding the NEXT.md section during ordinary progress updates
 
 Before ending any session, make sure `.handoff/DRAFT.md` uses this exact format:
 
-Write normal human-readable Markdown. Do not write patch or diff notation in `.handoff/DRAFT.md`; bullets should start with `- `, never `+- ` or `-- `.
+Write normal human-readable Markdown. Do not write patch or diff notation in `.handoff/DRAFT.md`; bullets should start with `- `, never `+- ` or `-- `. Leave a blank line between bullets.
 
 ## LAST.md
 

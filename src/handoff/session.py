@@ -155,7 +155,7 @@ def render_day_log(
         "## Summary\n\n" + summary,
         "## Completed\n\n" + render_bullets(completed),
         "## Open Issues\n\n" + render_bullets(open_issues),
-        "## Sessions\n\n" + ("\n".join(session_rows) if session_rows else "- None"),
+        "## Sessions\n\n" + ("\n\n".join(session_rows) if session_rows else "- None"),
     ]
     return render_frontmatter(metadata) + "\n\n".join(body) + "\n"
 
