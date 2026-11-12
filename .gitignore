@@ -19,3 +19,6 @@ build/
 
 # Codex
 .codex/*
+
+# Personal agent files
+CLAUDE.local.md
