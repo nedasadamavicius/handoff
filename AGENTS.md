@@ -57,6 +57,37 @@ Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, 
 - In Claude Code these are the sub-agents in `.claude/agents/`. In other tools, run each role as a separate
   agent or session with the same instructions.
 
+# Project specifics
+
+## Build and test
+- Python 3.11+, managed with Poetry. `poetry install` sets up the virtualenv; `poetry run handoff` runs from source.
+- Tests: `poetry run pytest`. Every change keeps the full suite green.
+- Format and lint before committing: `poetry run isort src tests`, `poetry run black src tests`,
+  `poetry run pylint src/handoff`. On Windows set `PYTHONUTF8=1` first, or isort skips files with non-ASCII.
+- Dependency changes go through `poetry add` and are committed together with `poetry.lock`.
+- Releases: bump `version` in `pyproject.toml`, add a line to `docs/CHANGELOG.md`, tag `vX.Y.Z`. Details in
+  `docs/development.md`.
+
+## Code conventions
+- Line length 120; black and isort own formatting, never hand-format.
+- Names are full words; variables, arguments and attributes have at least three characters (`x`, `y` allowed).
+- Code reads without comments; keep a comment only for a non-obvious reason (OS or library quirk).
+- Shared behavior lives in one place: frontmatter and bullets in `documents.py`, unique paths in `paths.py`,
+  dialog styling in `DialogScreen` (`tui_forms.py`).
+- Pylint complexity checks are on. Some older functions exceed them; never add new ones.
+- TUI glyphs (key symbols, em dashes in labels) are intentional and allowed in `src/` and `docs/` via
+  `.asciiignore`.
+
+## Product decisions
+- The TUI stays in the red (crimson) family. "Effects" means same-hue glow, never new colors. Palette changes
+  are mirrored in the user theme `graphite-crimson.yaml` (see `docs/themes.md`).
+- No in-app editing or IDE features: editing is delegated to the user's configured editor.
+- No embedded terminals: terminal editors and agents open full screen with handoff suspended or in a
+  multiplexer (tmux/psmux). Embedding via PTY froze on Windows; don't retry.
+- Overview panels (LAST/NEXT) are read-only handoff artifacts, updated at handoff time only; no mid-session task
+  management.
+- Customised `CLAUDE.md`/`AGENTS.md` files are never rewritten by handoff; only untouched templates are migrated.
+
 ## Handoff
 
 During the session, keep `.handoff/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
