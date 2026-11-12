@@ -1,9 +1,5 @@
 Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
 
-## Git
-
-Use conventional commit messages (`type(scope): description`). Use only ASCII characters in commit messages. Never add a `Co-Authored-By` trailer to commits.
-
 ## Handoff
 
 During the session, keep `.handoff/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
