@@ -1,0 +1,7 @@
+#!/bin/sh
+root=$(git rev-parse --show-toplevel)
+sh "$root/.githooks/check-rules.sh" staged || exit 1
+for hook in "$root"/.githooks/pre-commit.d/*.sh; do
+  [ -f "$hook" ] || continue
+  sh "$hook" || exit 1
+done

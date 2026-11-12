@@ -13,6 +13,9 @@ build/
 
 # Claude Code
 .claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/agents/
 
 # Codex
 .codex/*

@@ -1,0 +1,3 @@
+# Intentional UI glyphs (TUI labels, key symbols) and legacy template text that must match old files.
+src/handoff/**
+docs/**

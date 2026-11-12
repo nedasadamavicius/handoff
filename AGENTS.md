@@ -1,5 +1,62 @@
 Read `.handoff/WORKSPACE.md` to understand this workspace - its goals, context, and constraints.
 
+# Project rules
+
+## Ownership
+- The person who initiated the work is its only owner.
+- Never add AI co-authorship, co-signing or attribution anywhere: no `Co-Authored-By` trailers, no "Generated with"
+  lines, no AI mentions in commit messages, PR descriptions, code comments, docs or release notes.
+
+## Plain ASCII
+- Use only plain ASCII characters (0x00-0x7F) in everything you generate: code, comments, docs, commit messages and
+  PR text.
+- No em or en dashes, curly quotes, arrows, multiplication signs, ellipsis characters, box-drawing characters or
+  emoji. Use `-`, `"`, `'`, `->`, `x`, `...` and `|--` / `` `-- `` instead.
+- Exception: content the user wrote, or data that requires non-ASCII (e.g. translations), stays as it is.
+
+## Conventional commits
+- Every commit message follows Conventional Commits: `<type>(<optional scope>): <description>`.
+- Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Mark breaking changes with `!`
+  or a `BREAKING CHANGE:` footer.
+- One logical change per commit, so history stays easy to trace.
+
+## Enforcement
+- These rules are enforced by git hooks in `.githooks/` and by the `rules` CI workflow.
+- After cloning, run `git config core.hooksPath .githooks` once to turn on the local hooks.
+- Never bypass the checks (`--no-verify`, disabling the workflow). If a check is wrong, fix the check in a
+  separate commit.
+- Paths that legitimately need non-ASCII (e.g. translations) go in `.asciiignore`, one glob per line.
+
+# Software rules
+
+## Specs and traceability
+- **Spec or commits only.** Before starting work, decide and say which, and why. If unsure, ask.
+  - Write a spec if there is a real decision to make, unknowns that need a prototype, no obvious "done", several
+    commits serving one goal, or risk (data, security, public API, migrations).
+  - Otherwise commits are enough, and the commit body says why, not only what.
+  - If a small change hits a decision halfway, stop and write a spec.
+- **Where specs live.** `specs/NNN-short-name.md`, copied from `specs/_template.md`. One goal per spec. Specs
+  that are done, superseded or dropped move to `specs/archive/`; they are never deleted.
+- **Traceability.** Commits for a spec carry the footers `Spec: NNN` and `Task: T1`. Tests name the acceptance
+  criterion they check. Each PR links its spec.
+- **Execution.** While a spec is in progress, make no new decisions. If something isn't covered, park the spec:
+  record the gap as an open question, set the status back to `draft`, and stop. The gap is resolved in a
+  separate planning session, never by switching the current session to planning.
+- **Decisions are human.** AI drafts specs and code; the owner decides. Where a decision, assumption or open
+  question comes up, present options and a recommendation, and let the owner decide.
+
+## Development roles
+- **Only in development sessions:** one `ready` spec per session. Planning and writing specs happen in separate
+  engineering sessions, and small commit-only changes have no fixed roles.
+- **Orchestrator (main session):** hands tasks to the roles below, reviews their results against the spec, and
+  commits each task with the `Spec:` and `Task:` footers. Doesn't write the code itself.
+- **Test writer:** writes tests from the acceptance criteria before the code exists.
+- **Implementer:** makes those tests pass. Never edits tests; reports a wrong test or a gap instead.
+- **Validator** (when the spec has a Validation section): checks results against inputs outside the
+  implementation. Reports findings; the owner decides.
+- In Claude Code these are the sub-agents in `.claude/agents/`. In other tools, run each role as a separate
+  agent or session with the same instructions.
+
 ## Handoff
 
 During the session, keep `.handoff/DRAFT.md` current when you make material progress. Treat it as the live handoff ledger, not only an exit note. After meaningful code or content changes, update the draft's LAST.md section with:
